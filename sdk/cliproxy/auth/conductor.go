@@ -2090,8 +2090,25 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		}
 
-		_ = m.persist(ctx, auth)
-		authSnapshot = auth.Clone()
+		// Auto-cleanup: remove auth entries that are permanently invalid.
+		// Free accounts hitting 429, or any account with 401/403(banned) are auto-removed.
+		autoRemoved := false
+		if !result.Success && result.Error != nil {
+			errStatusCode := statusCodeFromResult(result.Error)
+			if shouldAutoRemoveAuth(auth, errStatusCode) {
+				reason := auth.StatusMessage
+				if reason == "" {
+					reason = result.Error.Message
+				}
+				m.autoRemoveAuth(ctx, auth, reason)
+				autoRemoved = true
+			}
+		}
+
+		if !autoRemoved {
+			_ = m.persist(ctx, auth)
+			authSnapshot = auth.Clone()
+		}
 	}
 	m.mu.Unlock()
 	if m.scheduler != nil && authSnapshot != nil {
