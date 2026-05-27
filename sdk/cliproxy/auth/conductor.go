@@ -2390,8 +2390,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		}
 
-		// Auto-cleanup: remove permanently invalid auths; quarantine 429-limited
-		// auth files for external recovery.
+		// Auto-cleanup: remove permanently invalid or rate-limited auths.
 		autoRemoved := false
 		if !result.Success && result.Error != nil {
 			errStatusCode := statusCodeFromResult(result.Error)
@@ -2399,10 +2398,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			if reason == "" {
 				reason = result.Error.Message
 			}
-			if errStatusCode == http.StatusTooManyRequests {
-				m.quarantineRateLimitedAuth(ctx, auth, reason)
-				autoRemoved = true
-			} else if shouldAutoRemoveAuth(auth, errStatusCode) {
+			if shouldAutoRemoveAuth(auth, errStatusCode) {
 				m.autoRemoveAuth(ctx, auth, reason)
 				autoRemoved = true
 			}

@@ -107,7 +107,7 @@ const managementPanelFaultCleanupScript = `<script id="cpa-remove-faulty-auths-e
     button.id = buttonId;
     button.type = 'button';
     button.textContent = '去除故障';
-    button.title = '检查全部账号；401 删除，429 移入隔离目录';
+    button.title = '检查全部账号；401 和 429 直接删除';
     button.style.cssText = [
       'position:fixed',
       'right:24px',
@@ -128,7 +128,7 @@ const managementPanelFaultCleanupScript = `<script id="cpa-remove-faulty-auths-e
     button.addEventListener('mouseleave', function() { if (!button.disabled) button.style.background = '#dc2626'; });
     button.addEventListener('click', async function() {
       if (button.disabled) return;
-      if (!window.confirm('将检查全部账号：401 会直接删除，429 会移入隔离目录。是否继续？')) return;
+      if (!window.confirm('将检查全部账号：401 和 429 会直接删除。是否继续？')) return;
       const info = connectionInfo();
       if (!info.managementKey.trim()) {
         window.alert('缺少管理密钥');
@@ -155,10 +155,10 @@ const managementPanelFaultCleanupScript = `<script id="cpa-remove-faulty-auths-e
         }
         const checked = Number(data.checked || 0);
         const removed = Number(data.removed_401 || 0);
-        const quarantined = Number(data.quarantined_429 || 0);
+        const removed429 = Number(data.removed_429 || 0);
         const failed = Number(data.failed || 0);
         button.textContent = '已完成';
-        window.alert('去除故障完成：检查 ' + checked + '，删除401 ' + removed + '，隔离429 ' + quarantined + '，失败 ' + failed);
+        window.alert('去除故障完成：检查 ' + checked + '，删除401 ' + removed + '，删除429 ' + removed429 + '，失败 ' + failed);
         window.location.reload();
       } catch (err) {
         window.alert('去除故障失败：' + (err && err.message ? err.message : String(err)));

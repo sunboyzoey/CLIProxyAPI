@@ -53,7 +53,7 @@ type removeFaultyAuthFilesResponse struct {
 	Checked        int                     `json:"checked"`
 	OK             int                     `json:"ok"`
 	Removed401     int                     `json:"removed_401"`
-	Quarantined429 int                     `json:"quarantined_429"`
+	Removed429     int                     `json:"removed_429"`
 	Failed         int                     `json:"failed"`
 	Skipped        int                     `json:"skipped"`
 	MemoryReloaded bool                    `json:"memory_reloaded"`
@@ -72,7 +72,7 @@ type faultSweepAuthOutcome struct {
 }
 
 // RemoveFaultyAuthFiles checks all in-memory OAuth credentials, removes auths
-// that return 401, and quarantines auths that return 429.
+// that return 401 or 429, and reloads the in-memory auth pool when requested.
 func (h *Handler) RemoveFaultyAuthFiles(c *gin.Context) {
 	if h == nil || h.authManager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "auth manager unavailable"})
@@ -148,8 +148,8 @@ func (h *Handler) RemoveFaultyAuthFiles(c *gin.Context) {
 		case "removed_401":
 			resp.Removed401++
 			resp.Checked++
-		case "quarantined_429":
-			resp.Quarantined429++
+		case "removed_429":
+			resp.Removed429++
 			resp.Checked++
 		case "failed":
 			resp.Failed++
@@ -336,7 +336,7 @@ func (h *Handler) applyFaultSweepFailure(ctx context.Context, auth *coreauth.Aut
 		}
 	case http.StatusTooManyRequests:
 		h.markFaultSweepResult(ctx, auth, statusCode, "fault sweep upstream returned 429")
-		out.Status = "quarantined_429"
+		out.Status = "removed_429"
 		if out.Message == "" {
 			out.Message = "rate limited"
 		}

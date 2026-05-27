@@ -621,7 +621,7 @@ func TestManager_Execute_DisableCooling_DoesNotBlackoutAfter403(t *testing.T) {
 	}
 }
 
-func TestManager_Execute_DisableCooling_DoesNotBlackoutAfter429RetryAfter(t *testing.T) {
+func TestManager_Execute_RemovesAuthAfter429RetryAfter(t *testing.T) {
 	prev := quotaCooldownDisabled.Load()
 	quotaCooldownDisabled.Store(false)
 	t.Cleanup(func() { quotaCooldownDisabled.Store(prev) })
@@ -668,29 +668,18 @@ func TestManager_Execute_DisableCooling_DoesNotBlackoutAfter429RetryAfter(t *tes
 	if errExecute2 == nil {
 		t.Fatal("expected second execute error")
 	}
-	if statusCodeFromError(errExecute2) != http.StatusTooManyRequests {
-		t.Fatalf("second execute status = %d, want %d", statusCodeFromError(errExecute2), http.StatusTooManyRequests)
-	}
 
 	calls := executor.ExecuteCalls()
-	if len(calls) != 2 {
-		t.Fatalf("execute calls = %d, want 2", len(calls))
+	if len(calls) != 1 {
+		t.Fatalf("execute calls = %d, want 1", len(calls))
 	}
 
-	updated, ok := m.GetByID(auth.ID)
-	if !ok || updated == nil {
-		t.Fatalf("expected auth to be present")
-	}
-	state := updated.ModelStates[model]
-	if state == nil {
-		t.Fatalf("expected model state to be present")
-	}
-	if !state.NextRetryAfter.IsZero() {
-		t.Fatalf("expected NextRetryAfter to be zero when disable_cooling=true, got %v", state.NextRetryAfter)
+	if _, ok := m.GetByID(auth.ID); ok {
+		t.Fatalf("expected auth to be removed after 429")
 	}
 }
 
-func TestManager_Execute_DisableCooling_RetriesAfter429RetryAfter(t *testing.T) {
+func TestManager_Execute_DoesNotRetryRemoved429Auth(t *testing.T) {
 	prev := quotaCooldownDisabled.Load()
 	quotaCooldownDisabled.Store(false)
 	t.Cleanup(func() { quotaCooldownDisabled.Store(prev) })
@@ -736,8 +725,11 @@ func TestManager_Execute_DisableCooling_RetriesAfter429RetryAfter(t *testing.T) 
 	}
 
 	calls := executor.ExecuteCalls()
-	if len(calls) != 4 {
-		t.Fatalf("execute calls = %d, want 4 (initial + 3 retries)", len(calls))
+	if len(calls) != 1 {
+		t.Fatalf("execute calls = %d, want 1", len(calls))
+	}
+	if _, ok := m.GetByID(auth.ID); ok {
+		t.Fatalf("expected auth to be removed after 429")
 	}
 }
 

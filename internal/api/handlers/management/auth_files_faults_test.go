@@ -12,7 +12,7 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
-func TestRemoveFaultyAuthFilesChecksAllOAuthAuthsAndRemoves401(t *testing.T) {
+func TestRemoveFaultyAuthFilesChecksAllOAuthAuthsAndRemoves401And429(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	store := &memoryAuthStore{items: make(map[string]*coreauth.Auth)}
@@ -33,6 +33,14 @@ func TestRemoveFaultyAuthFilesChecksAllOAuthAuthsAndRemoves401(t *testing.T) {
 			"access_token": "expired-token",
 		},
 	}
+	limitedAuth := &coreauth.Auth{
+		ID:       "codex-limited",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"email":        "limited@example.com",
+			"access_token": "limited-token",
+		},
+	}
 	apiKeyAuth := &coreauth.Auth{
 		ID:       "codex-api-key",
 		Provider: "codex",
@@ -43,7 +51,7 @@ func TestRemoveFaultyAuthFilesChecksAllOAuthAuthsAndRemoves401(t *testing.T) {
 			"api_key": "sk-test",
 		},
 	}
-	for _, auth := range []*coreauth.Auth{validAuth, expiredAuth, apiKeyAuth} {
+	for _, auth := range []*coreauth.Auth{validAuth, expiredAuth, limitedAuth, apiKeyAuth} {
 		if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
 			t.Fatalf("register %s: %v", auth.ID, errRegister)
 		}
@@ -57,6 +65,9 @@ func TestRemoveFaultyAuthFilesChecksAllOAuthAuthsAndRemoves401(t *testing.T) {
 		case "Bearer expired-token":
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":{"message":"token invalidated"}}`))
+		case "Bearer limited-token":
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
 		default:
 			t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
 		}
@@ -88,12 +99,15 @@ func TestRemoveFaultyAuthFilesChecksAllOAuthAuthsAndRemoves401(t *testing.T) {
 	if errUnmarshal := json.Unmarshal(recorder.Body.Bytes(), &resp); errUnmarshal != nil {
 		t.Fatalf("unmarshal response: %v", errUnmarshal)
 	}
-	if resp.Checked != 2 || resp.OK != 1 || resp.Removed401 != 1 || resp.Skipped != 1 || !resp.MemoryReloaded {
+	if resp.Checked != 3 || resp.OK != 1 || resp.Removed401 != 1 || resp.Removed429 != 1 || resp.Skipped != 1 || !resp.MemoryReloaded {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
 
 	if _, ok := manager.GetByID("codex-expired"); ok {
 		t.Fatal("expired auth still present in manager")
+	}
+	if _, ok := manager.GetByID("codex-limited"); ok {
+		t.Fatal("limited auth still present in manager")
 	}
 	if _, ok := manager.GetByID("codex-valid"); !ok {
 		t.Fatal("valid auth missing from manager")

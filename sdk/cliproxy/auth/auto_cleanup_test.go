@@ -2,11 +2,7 @@ package auth
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
-
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 )
 
 func TestShouldAutoRemoveAuth_401(t *testing.T) {
@@ -36,8 +32,8 @@ func TestShouldAutoRemoveAuth_429_Free(t *testing.T) {
 		Provider: "codex",
 		Metadata: map[string]any{"chatgpt_plan_type": "free"},
 	}
-	if shouldAutoRemoveAuth(auth, 429) {
-		t.Error("429 should be quarantined, not auto-removed")
+	if !shouldAutoRemoveAuth(auth, 429) {
+		t.Error("429 should trigger auto-remove")
 	}
 }
 
@@ -48,8 +44,8 @@ func TestShouldAutoRemoveAuth_429_FreeMissingPlan(t *testing.T) {
 		Provider: "codex",
 		Metadata: map[string]any{"email": "test@example.com"},
 	}
-	if shouldAutoRemoveAuth(auth, 429) {
-		t.Error("429 should be quarantined even when plan_type is missing")
+	if !shouldAutoRemoveAuth(auth, 429) {
+		t.Error("429 should trigger auto-remove even when plan_type is missing")
 	}
 }
 
@@ -59,8 +55,8 @@ func TestShouldAutoRemoveAuth_429_Plus(t *testing.T) {
 		Provider: "codex",
 		Metadata: map[string]any{"chatgpt_plan_type": "plus"},
 	}
-	if shouldAutoRemoveAuth(auth, 429) {
-		t.Error("429 on plus account should NOT trigger auto-remove")
+	if !shouldAutoRemoveAuth(auth, 429) {
+		t.Error("429 on plus account should trigger auto-remove")
 	}
 }
 
@@ -70,8 +66,8 @@ func TestShouldAutoRemoveAuth_429_Team(t *testing.T) {
 		Provider: "codex",
 		Metadata: map[string]any{"chatgpt_plan_type": "team"},
 	}
-	if shouldAutoRemoveAuth(auth, 429) {
-		t.Error("429 on team account should NOT trigger auto-remove")
+	if !shouldAutoRemoveAuth(auth, 429) {
+		t.Error("429 on team account should trigger auto-remove")
 	}
 }
 
@@ -86,8 +82,8 @@ func TestShouldAutoRemoveAuth_429_PlusNested(t *testing.T) {
 			},
 		},
 	}
-	if shouldAutoRemoveAuth(auth, 429) {
-		t.Error("429 on plus account (nested JWT) should NOT trigger auto-remove")
+	if !shouldAutoRemoveAuth(auth, 429) {
+		t.Error("429 on plus account (nested JWT) should trigger auto-remove")
 	}
 }
 
@@ -162,63 +158,6 @@ func TestAutoRemoveAuth(t *testing.T) {
 	// Should be deleted from store
 	if !store.deleted[auth.ID] {
 		t.Error("auth should be deleted from store")
-	}
-}
-
-func TestQuarantineRateLimitedAuthMovesFileOutsideAuthDir(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	authDir := filepath.Join(root, "auths")
-	rateLimitDir := filepath.Join(root, "auths-429")
-	if err := os.MkdirAll(authDir, 0o700); err != nil {
-		t.Fatalf("mkdir auth dir: %v", err)
-	}
-	srcPath := filepath.Join(authDir, "account.json")
-	if err := os.WriteFile(srcPath, []byte(`{"type":"codex"}`), 0o600); err != nil {
-		t.Fatalf("write auth file: %v", err)
-	}
-
-	m := NewManager(nil, nil, nil)
-	m.SetConfig(&internalconfig.Config{
-		AuthDir:          authDir,
-		RateLimitAuthDir: rateLimitDir,
-	})
-	auth := &Auth{
-		ID:         "account.json",
-		Provider:   "codex",
-		FileName:   "account.json",
-		Status:     StatusActive,
-		Attributes: map[string]string{"path": srcPath},
-	}
-	m.auths[auth.ID] = auth
-
-	m.quarantineRateLimitedAuth(ctx, auth, "quota exhausted")
-
-	if _, err := os.Stat(srcPath); !os.IsNotExist(err) {
-		t.Fatalf("source file still exists or stat failed: %v", err)
-	}
-	dstPath := filepath.Join(rateLimitDir, "account.json")
-	if _, err := os.Stat(dstPath); err != nil {
-		t.Fatalf("destination file missing: %v", err)
-	}
-	if _, exists := m.auths[auth.ID]; exists {
-		t.Fatal("auth should be removed from manager after quarantine")
-	}
-}
-
-func TestRateLimitAuthDirFallsBackWhenInsideAuthDir(t *testing.T) {
-	root := t.TempDir()
-	authDir := filepath.Join(root, "auths")
-	m := NewManager(nil, nil, nil)
-	m.SetConfig(&internalconfig.Config{
-		AuthDir:          authDir,
-		RateLimitAuthDir: filepath.Join(authDir, "429"),
-	})
-
-	got := m.rateLimitAuthDir()
-	want := authDir + "-429"
-	if got != want {
-		t.Fatalf("rateLimitAuthDir = %q, want %q", got, want)
 	}
 }
 
