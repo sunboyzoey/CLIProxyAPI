@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -152,6 +153,7 @@ func (h *Handler) APICall(c *gin.Context) {
 		}
 		if auth != nil && token == "" {
 			if tokenErr != nil {
+				h.cleanupUnauthorizedAPICallTokenError(c.Request.Context(), auth, tokenErr)
 				c.JSON(http.StatusBadRequest, gin.H{"error": "auth token refresh failed"})
 				return
 			}
@@ -209,11 +211,65 @@ func (h *Handler) APICall(c *gin.Context) {
 		return
 	}
 
+	h.cleanupUnauthorizedAPICallAuth(c.Request.Context(), auth, resp.StatusCode)
+
 	c.JSON(http.StatusOK, apiCallResponse{
 		StatusCode: resp.StatusCode,
 		Header:     resp.Header,
 		Body:       string(respBody),
 	})
+}
+
+func (h *Handler) cleanupUnauthorizedAPICallTokenError(ctx context.Context, auth *coreauth.Auth, err error) {
+	if apiCallErrorStatusCode(err) == http.StatusUnauthorized {
+		h.cleanupUnauthorizedAPICallAuth(ctx, auth, http.StatusUnauthorized)
+	}
+}
+
+func (h *Handler) cleanupUnauthorizedAPICallAuth(ctx context.Context, auth *coreauth.Auth, statusCode int) {
+	if h == nil || h.authManager == nil || auth == nil || strings.TrimSpace(auth.ID) == "" {
+		return
+	}
+	if statusCode != http.StatusUnauthorized {
+		return
+	}
+
+	h.authManager.MarkResult(ctx, coreauth.Result{
+		AuthID:   auth.ID,
+		Provider: auth.Provider,
+		Success:  false,
+		Error: &coreauth.Error{
+			Code:       "unauthorized",
+			Message:    "management api-call upstream returned 401",
+			HTTPStatus: http.StatusUnauthorized,
+			Retryable:  false,
+		},
+	})
+}
+
+func apiCallErrorStatusCode(err error) int {
+	if err == nil {
+		return 0
+	}
+
+	type statusCoder interface {
+		StatusCode() int
+	}
+	var statusErr statusCoder
+	if errors.As(err, &statusErr) && statusErr != nil {
+		return statusErr.StatusCode()
+	}
+
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) && retrieveErr != nil && retrieveErr.Response != nil {
+		return retrieveErr.Response.StatusCode
+	}
+
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "status 401") || strings.Contains(lower, "401 unauthorized") {
+		return http.StatusUnauthorized
+	}
+	return 0
 }
 
 func firstNonEmptyString(values ...*string) string {

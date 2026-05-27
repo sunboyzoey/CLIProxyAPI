@@ -46,6 +46,9 @@ type Config struct {
 	// AuthDir is the directory where authentication token files are stored.
 	AuthDir string `yaml:"auth-dir" json:"-"`
 
+	// RateLimitAuthDir is where 429-limited auth files are moved for external recovery.
+	RateLimitAuthDir string `yaml:"rate-limit-auth-dir" json:"-"`
+
 	// Debug enables or disables debug-level logging and other debug features.
 	Debug bool `yaml:"debug" json:"debug"`
 

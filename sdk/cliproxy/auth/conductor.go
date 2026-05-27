@@ -2390,16 +2390,19 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		}
 
-		// Auto-cleanup: remove auth entries that are permanently invalid.
-		// Free accounts hitting 429, or any account with 401/403(banned) are auto-removed.
+		// Auto-cleanup: remove permanently invalid auths; quarantine 429-limited
+		// auth files for external recovery.
 		autoRemoved := false
 		if !result.Success && result.Error != nil {
 			errStatusCode := statusCodeFromResult(result.Error)
-			if shouldAutoRemoveAuth(auth, errStatusCode) {
-				reason := auth.StatusMessage
-				if reason == "" {
-					reason = result.Error.Message
-				}
+			reason := auth.StatusMessage
+			if reason == "" {
+				reason = result.Error.Message
+			}
+			if errStatusCode == http.StatusTooManyRequests {
+				m.quarantineRateLimitedAuth(ctx, auth, reason)
+				autoRemoved = true
+			} else if shouldAutoRemoveAuth(auth, errStatusCode) {
 				m.autoRemoveAuth(ctx, auth, reason)
 				autoRemoved = true
 			}
