@@ -899,7 +899,7 @@ func schedulerAuthCandidates(auths []*Auth) []pluginapi.SchedulerAuthCandidate {
 			Provider:   strings.ToLower(strings.TrimSpace(auth.Provider)),
 			Priority:   authPriority(auth),
 			Status:     string(auth.Status),
-			Attributes: schedulerSafeAttributes(auth.Attributes),
+			Attributes: nativeProbeSchedulerAttributes(auth),
 		})
 	}
 	return out
@@ -992,8 +992,8 @@ func clearSchedulerSelectionID(meta map[string]any) {
 	delete(meta, cliproxyexecutor.SelectionIDMetadataKey)
 }
 
-func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginScheduler, provider string, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}, candidates []*Auth) (*Auth, bool, error) {
-	if scheduler == nil || len(candidates) == 0 {
+func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginScheduler, provider string, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}, candidates []*Auth, lookup []pluginapi.SchedulerAuthCandidate) (*Auth, bool, error) {
+	if scheduler == nil || (len(candidates) == 0 && len(lookup) == 0) {
 		clearSchedulerSelectionID(opts.Metadata)
 		return nil, false, nil
 	}
@@ -1016,12 +1016,14 @@ func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginSc
 		requestProvider = ""
 	}
 	req := pluginapi.SchedulerPickRequest{
-		Provider:   requestProvider,
-		Providers:  schedulerProviders(providerKey, providers),
-		Model:      model,
-		Stream:     opts.Stream,
-		Options:    schedulerOptions(opts),
-		Candidates: schedulerAuthCandidates(candidates),
+		Provider:                 requestProvider,
+		Providers:                schedulerProviders(providerKey, providers),
+		Model:                    model,
+		Stream:                   opts.Stream,
+		Options:                  schedulerOptions(opts),
+		Candidates:               schedulerAuthCandidates(candidates),
+		LookupCandidatesProvided: lookup != nil,
+		LookupCandidates:         lookup,
 	}
 	resp, handled, errPick := scheduler.PickAuth(ctx, req)
 	if errPick != nil {
@@ -1042,10 +1044,21 @@ func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginSc
 		return nil, true, wrapRequestStopError(&Error{Code: rejectCode, Message: rejectMessage})
 	}
 	if selected := pickSchedulerAuthByID(candidates, resp.AuthID); selected != nil {
+		if lookup != nil {
+			current, errCurrent := m.revalidateSchedulerSelection(ctx, selected, model, opts, tried)
+			if errCurrent != nil {
+				return nil, true, errCurrent
+			}
+			selected = current
+		}
 		keepSelectionID = true
 		return selected, true, nil
 	}
 
+	// A lookup-only callback can diagnose or reject, never bypass availability.
+	if len(candidates) == 0 {
+		return nil, false, nil
+	}
 	strategy, okStrategy := builtinSchedulerStrategy(resp.DelegateBuiltin)
 	if !okStrategy {
 		return nil, false, nil
@@ -1946,6 +1959,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
 	pluginScheduler, schedulerAcross := m.snapshotPluginScheduler()
+	schedulerLookup := pluginSchedulerWantsLookupCandidates(pluginScheduler)
 
 	m.mu.RLock()
 	selector := m.selector
@@ -2004,9 +2018,13 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		selectorAuths []*Auth
 		errAvailable  error
 	)
+	var lookup []pluginapi.SchedulerAuthCandidate
+	if schedulerLookup {
+		lookup = m.schedulerLookupCandidates(candidates, model, now)
+	}
 	if len(candidates) > 0 {
 		available, selectorAuths, errAvailable = m.availableAuthsForSelector(ctx, selector, candidates, provider, model, now, schedulerAcross, opts.Headers)
-		if errAvailable != nil && !canInspectUnavailableAffinity {
+		if errAvailable != nil && !canInspectUnavailableAffinity && len(lookup) == 0 {
 			m.mu.RUnlock()
 			m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errAvailable)
 			return nil, nil, errAvailable
@@ -2015,10 +2033,14 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	transientAuthIDs := m.transientlyUnavailableSessionAffinityAuthIDs(ctx, selector, affinityCandidates, model, now, opts.Headers)
 	m.mu.RUnlock()
 
-	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, available)
+	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, available, lookup)
 	if errPick != nil {
 		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errPick)
 		return nil, nil, errPick
+	}
+	if errAvailable != nil && !canInspectUnavailableAffinity {
+		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errAvailable)
+		return nil, nil, errAvailable
 	}
 	if !handled {
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)
@@ -2372,6 +2394,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		return nil, nil, "", &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
 	pluginScheduler, schedulerAcross := m.snapshotPluginScheduler()
+	schedulerLookup := pluginSchedulerWantsLookupCandidates(pluginScheduler)
 
 	m.mu.RLock()
 	selector := m.selector
@@ -2434,9 +2457,13 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		selectorAuths []*Auth
 		errAvailable  error
 	)
+	var lookup []pluginapi.SchedulerAuthCandidate
+	if schedulerLookup {
+		lookup = m.schedulerLookupCandidates(candidates, model, now)
+	}
 	if len(candidates) > 0 {
 		available, selectorAuths, errAvailable = m.availableAuthsForSelector(ctx, selector, candidates, "mixed", model, now, schedulerAcross, opts.Headers)
-		if errAvailable != nil && !canInspectUnavailableAffinity {
+		if errAvailable != nil && !canInspectUnavailableAffinity && len(lookup) == 0 {
 			m.mu.RUnlock()
 			m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errAvailable)
 			return nil, nil, "", errAvailable
@@ -2445,10 +2472,14 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	transientAuthIDs := m.transientlyUnavailableSessionAffinityAuthIDs(ctx, selector, affinityCandidates, model, now, opts.Headers)
 	m.mu.RUnlock()
 
-	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, available)
+	selected, handled, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, available, lookup)
 	if errPick != nil {
 		m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errPick)
 		return nil, nil, "", errPick
+	}
+	if errAvailable != nil && !canInspectUnavailableAffinity {
+		m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errAvailable)
+		return nil, nil, "", errAvailable
 	}
 	if !handled {
 		selectorCtx := selectorContextForAvailableAuths(ctx, selector, model)

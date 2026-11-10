@@ -168,6 +168,14 @@ type Error struct {
 	// for correctness. The same pair is accepted as error_detail on host.stream.emit
 	// and host.stream.close.
 	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+	// CredentialScope marks a quota failure shared by all models of this credential.
+	// Hosts advertise support through credential_scope_errors in lifecycle requests.
+	// Plugins requiring account-wide cooling must check that feature before use.
+	CredentialScope bool `json:"credential_scope,omitempty"`
+	// RequestScope identifies local admission/request failures that must neither
+	// cool credentials/models nor retry on another authorization. Hosts advertise
+	// support through request_scope_errors in lifecycle requests.
+	RequestScope bool `json:"request_scope,omitempty"`
 }
 
 // Error implements the error interface for Error.
@@ -192,6 +200,15 @@ func (e *Error) StatusCode() int {
 		return 0
 	}
 	return e.HTTPStatus
+}
+
+// IsCredentialScoped reports whether the error applies to every model on the credential.
+func (e *Error) IsCredentialScoped() bool {
+	return e != nil && e.CredentialScope
+}
+
+func (e *Error) IsRequestScoped() bool {
+	return e != nil && e.RequestScope && !e.CredentialScope
 }
 
 // NewError creates an Error instance with an optional HTTP status code.

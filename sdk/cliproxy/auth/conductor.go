@@ -118,6 +118,11 @@ type PluginSchedulerAcrossPriorities interface {
 	SchedulerWantsAcrossPriorities() bool
 }
 
+// PluginSchedulerLookupCandidates opts into a separate read-only selection scope.
+type PluginSchedulerLookupCandidates interface {
+	SchedulerWantsLookupCandidates() bool
+}
+
 type pluginSchedulerState interface {
 	HasScheduler() bool
 }

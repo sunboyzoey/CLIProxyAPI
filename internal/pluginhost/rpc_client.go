@@ -53,11 +53,17 @@ type rpcError struct {
 	message           string
 	statusCode        int
 	retryAfterSeconds int
+	credentialScope   bool
+	requestScope      bool
 }
 
 func (e rpcError) Error() string {
 	return e.message
 }
+
+func (e rpcError) IsCredentialScoped() bool { return e.credentialScope }
+
+func (e rpcError) IsRequestScoped() bool { return e.requestScope && !e.credentialScope }
 
 func (e rpcError) ErrorCode() string {
 	return e.Code
@@ -107,9 +113,11 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 		return pluginapi.Plugin{}, fmt.Errorf("plugin client is nil")
 	}
 	resp, errCall := callPlugin[rpcRegistration](ctx, client, method, rpcLifecycleRequest{
-		ConfigYAML:         bytes.Clone(configYAML),
-		SchemaVersion:      pluginabi.SchemaVersion,
-		MultiAuthProviders: pluginabi.SchemaVersion >= pluginabi.SchemaVersionMultiAuthProviders,
+		ConfigYAML:            bytes.Clone(configYAML),
+		SchemaVersion:         pluginabi.SchemaVersion,
+		MultiAuthProviders:    pluginabi.SchemaVersion >= pluginabi.SchemaVersionMultiAuthProviders,
+		CredentialScopeErrors: true,
+		RequestScopeErrors:    true,
 	})
 	if errCall != nil {
 		return pluginapi.Plugin{}, errCall
@@ -164,6 +172,7 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 	if resp.Capabilities.Scheduler {
 		plugin.Capabilities.Scheduler = adapter
 		plugin.Capabilities.SchedulerAcrossPriorities = resp.Capabilities.SchedulerAcrossPriorities
+		plugin.Capabilities.SchedulerLookupCandidates = resp.Capabilities.SchedulerLookupCandidates
 	}
 	if resp.Capabilities.ModelRouter {
 		plugin.Capabilities.ModelRouter = adapter
@@ -294,6 +303,9 @@ func sanitizePluginRequest(request any) any {
 		req.Options.Metadata = sanitizePluginMetadata(req.Options.Metadata)
 		for index := range req.Candidates {
 			req.Candidates[index].Metadata = sanitizePluginMetadata(req.Candidates[index].Metadata)
+		}
+		for index := range req.LookupCandidates {
+			req.LookupCandidates[index].Metadata = sanitizePluginMetadata(req.LookupCandidates[index].Metadata)
 		}
 		return req
 	case pluginapi.ModelRouteRequest:
@@ -440,6 +452,8 @@ func decodeEnvelopeResult[T any](envelope pluginabi.Envelope) (T, error) {
 				message:           message,
 				statusCode:        envelope.Error.HTTPStatus,
 				retryAfterSeconds: envelope.Error.RetryAfterSeconds,
+				credentialScope:   envelope.Error.CredentialScope,
+				requestScope:      envelope.Error.RequestScope,
 			}
 		}
 		return zero, fmt.Errorf("plugin call failed")

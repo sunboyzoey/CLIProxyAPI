@@ -341,7 +341,7 @@ func TestExecutorAdapterValidatesThinkingAndClampsOrRejectsOutOfRange(t *testing
 		t.Fatalf("plugin Execute was called %d times on bogus suffix", executeCalls)
 	}
 
-	// Unsupported level suffix -> rejected with ThinkingError (ErrLevelNotSupported).
+	// Higher tiers fall back to the supported high tier through central validation.
 	_, errLevel := adapter.Execute(context.Background(), nil, coreexecutor.Request{
 		Model:   "my-model(xhigh)",
 		Format:  sdktranslator.FormatClaude,
@@ -350,13 +350,13 @@ func TestExecutorAdapterValidatesThinkingAndClampsOrRejectsOutOfRange(t *testing
 		SourceFormat:   sdktranslator.FormatClaude,
 		ResponseFormat: sdktranslator.FormatClaude,
 	})
-	thinkingErr = nil
-	if !errors.As(errLevel, &thinkingErr) || thinkingErr.Code != thinking.ErrLevelNotSupported {
-		t.Fatalf("Execute(xhigh) error = %v, want ThinkingError(%s)", errLevel, thinking.ErrLevelNotSupported)
+	if errLevel != nil || executeCalls != 1 {
+		t.Fatalf("Execute(xhigh) error = %v, calls = %d; want supported high fallback", errLevel, executeCalls)
 	}
-	if executeCalls != 0 {
-		t.Fatalf("plugin Execute was called %d times on invalid level", executeCalls)
+	if got := ojson.GetBytesNoCopy(gotReq.Payload, "output_config.effort").String(); got != "high" {
+		t.Fatalf("fallback effort = %q, want high", got)
 	}
+	executeCalls = 0
 
 	// Out-of-range budget in request body -> rejected with ThinkingError (ErrBudgetOutOfRange).
 	_, errBudget := adapter.Execute(context.Background(), nil, coreexecutor.Request{

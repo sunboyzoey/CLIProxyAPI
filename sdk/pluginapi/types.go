@@ -99,6 +99,11 @@ type Capabilities struct {
 	// in SchedulerPickRequest.Candidates. When false (default), Candidates only contains
 	// credentials from the highest available priority tier.
 	SchedulerAcrossPriorities bool
+	// SchedulerLookupCandidates opts into read-only, request-authorized candidates
+	// before availability filtering. Lookup candidates cannot be selected unless
+	// they are also present in Candidates. The scheduler may be called with an
+	// empty selectable set to diagnose continuation ownership.
+	SchedulerLookupCandidates bool
 	// ModelRouter routes matching requests to a plugin executor, the router's own executor,
 	// or a built-in provider before model-to-provider resolution and auth selection.
 	ModelRouter ModelRouter
@@ -593,6 +598,12 @@ type SchedulerPickRequest struct {
 	Options SchedulerOptions
 	// Candidates contains auth records available for selection.
 	Candidates []SchedulerAuthCandidate
+	// LookupCandidatesProvided distinguishes a host-provided lookup scope from
+	// older hosts that do not support it. It is never supplied by the caller.
+	LookupCandidatesProvided bool
+	// LookupCandidates preserves provider, credential, model and retry restrictions
+	// while including unavailable credentials for read-only ownership checks.
+	LookupCandidates []SchedulerAuthCandidate
 }
 
 // SchedulerOptions carries request-scoped scheduler inputs.
@@ -617,6 +628,12 @@ type SchedulerAuthCandidate struct {
 	Attributes map[string]string
 	// Metadata contains mutable host-managed auth metadata.
 	Metadata map[string]any
+	// UnavailableReason is empty, "cooldown", or "blocked". These fields are
+	// supplied only for read-only LookupCandidates, not execution candidates.
+	UnavailableReason string
+	// RetryAfterSeconds is a rounded-up delay from the host's effective model or
+	// credential availability deadline. Zero means no known timed recovery.
+	RetryAfterSeconds int64
 }
 
 // SchedulerPickResponse returns a scheduler plugin routing decision.

@@ -42,6 +42,11 @@ func (h *Host) SchedulerWantsAcrossPriorities() bool {
 	return schedulerWantsAcrossPriorities(record.plugin.Capabilities)
 }
 
+func (h *Host) SchedulerWantsLookupCandidates() bool {
+	record := h.schedulerRecord()
+	return record != nil && schedulerWantsLookupCandidates(record.plugin.Capabilities)
+}
+
 func (h *Host) schedulerRecord() *capabilityRecord {
 	if h == nil {
 		return nil

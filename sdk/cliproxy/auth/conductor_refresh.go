@@ -1244,7 +1244,7 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 	if id == "" {
 		return nil, errors.New("auth id is empty")
 	}
-	if failedAccessToken != "" {
+	if failedAccessToken != "" && !isNativeProbeRefresh(ctx) {
 		m.markRejectedAccessToken(id, failedAccessToken)
 	}
 
@@ -1256,6 +1256,9 @@ func (m *Manager) refreshAuthForRequestAtEpoch(ctx context.Context, id, failedAc
 	}
 	lock.mu.Lock()
 	defer lock.mu.Unlock()
+	if isNativeProbeRefresh(ctx) && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 
 	m.mu.RLock()
 	auth := m.auths[id].Clone()

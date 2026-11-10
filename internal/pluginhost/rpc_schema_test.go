@@ -487,6 +487,9 @@ func TestRegisterRPCPluginSendsHostSchemaVersion(t *testing.T) {
 	if lookup.lastLifecycle.SchemaVersion != pluginabi.SchemaVersion {
 		t.Fatalf("lifecycle schema_version = %d, want %d", lookup.lastLifecycle.SchemaVersion, pluginabi.SchemaVersion)
 	}
+	if !lookup.lastLifecycle.CredentialScopeErrors {
+		t.Fatal("host failed to advertise credential-scope errors")
+	}
 	if !lookup.lastLifecycle.MultiAuthProviders {
 		t.Fatal("lifecycle multi_auth_providers = false, want true")
 	}

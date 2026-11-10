@@ -32,6 +32,7 @@ type hostHTTPClient struct {
 	auth            *coreauth.Auth
 	provider        string
 	requestProxyURL string
+	loopbackDirect  bool
 }
 
 func (h *Host) newHTTPClient(auth *coreauth.Auth, providers ...string) pluginapi.HostHTTPClient {
@@ -215,6 +216,19 @@ func (h *Host) currentRuntimeConfig() *config.Config {
 }
 
 func (c *hostHTTPClient) newHTTPClientForRequest(ctx context.Context, cfg *config.Config, req pluginapi.HTTPRequest, httpReq *http.Request) (*http.Client, func(), error) {
+	if c.loopbackDirect {
+		// This transport is only reachable after the callback validates a literal
+		// loopback HTTP URL. Do not consult account/global/context proxies or let
+		// redirects turn this local connection into a direct upstream request.
+		transport := proxyutil.NewDirectTransport()
+		transport.DisableKeepAlives = true
+		return &http.Client{
+			Transport: transport,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}, transport.CloseIdleConnections, nil
+	}
 	profile := req.WireProfile
 	if profile == nil || (!profile.HTTP1Only && !profile.DisableAutoCompression && len(profile.HeaderProfile) == 0) {
 		client := helps.NewProxyAwareHTTPClient(c.proxyContext(ctx), cfg, c.auth, 0)

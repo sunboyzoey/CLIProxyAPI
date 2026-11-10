@@ -131,6 +131,13 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 
 	if len(support.Levels) > 0 && config.Mode == ModeLevel {
 		if !isLevelSupported(string(config.Level), support.Levels) {
+			// Preserve high-effort intent when the model only supports up to high.
+			if (config.Level == LevelXHigh || config.Level == LevelMax) &&
+				isLevelSupported(string(LevelHigh), support.Levels) &&
+				!isLevelSupported(string(LevelXHigh), support.Levels) &&
+				!isLevelSupported(string(LevelMax), support.Levels) {
+				config.Level = LevelHigh
+			}
 			if allowClampUnsupported {
 				config.Level = clampLevel(config.Level, modelInfo, toFormat)
 			}

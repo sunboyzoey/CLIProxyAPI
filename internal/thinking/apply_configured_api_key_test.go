@@ -79,7 +79,7 @@ func TestApplyThinkingWithModelInfoMapsResponsesToCodexHighIntent(t *testing.T) 
 	}
 }
 
-func TestApplyThinkingWithModelInfoKeepsSameFamilyValidationStrict(t *testing.T) {
+func TestApplyThinkingWithModelInfoFallsBackToSupportedHigh(t *testing.T) {
 	modelInfo := &registry.ModelInfo{
 		ID:       "openai-upstream",
 		Type:     "openai",
@@ -87,8 +87,11 @@ func TestApplyThinkingWithModelInfoKeepsSameFamilyValidationStrict(t *testing.T)
 	}
 	body := []byte(`{"reasoning_effort":"xhigh"}`)
 	out, err := thinking.ApplyThinkingWithModelInfo(body, body, "openai-upstream", "openai", "openai", "openai", modelInfo)
-	if err == nil {
-		t.Fatalf("ApplyThinkingWithModelInfo() error = nil, want unsupported xhigh error; body=%s", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ojson.GetBytes(out, "reasoning_effort").String(); got != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", got)
 	}
 }
 

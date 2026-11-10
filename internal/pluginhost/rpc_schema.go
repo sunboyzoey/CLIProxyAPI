@@ -8,9 +8,11 @@ import (
 )
 
 type rpcLifecycleRequest struct {
-	ConfigYAML         []byte `json:"config_yaml"`
-	SchemaVersion      uint32 `json:"schema_version"`
-	MultiAuthProviders bool   `json:"multi_auth_providers,omitempty"`
+	ConfigYAML            []byte `json:"config_yaml"`
+	SchemaVersion         uint32 `json:"schema_version"`
+	MultiAuthProviders    bool   `json:"multi_auth_providers,omitempty"`
+	CredentialScopeErrors bool   `json:"credential_scope_errors,omitempty"`
+	RequestScopeErrors    bool   `json:"request_scope_errors,omitempty"`
 }
 
 type rpcRegistration struct {
@@ -29,6 +31,7 @@ type rpcCapabilities struct {
 	FrontendAuthOmitBody              bool                         `json:"frontend_auth_omit_body,omitempty"`
 	Scheduler                         bool                         `json:"scheduler"`
 	SchedulerAcrossPriorities         bool                         `json:"scheduler_across_priorities,omitempty"`
+	SchedulerLookupCandidates         bool                         `json:"scheduler_lookup_candidates,omitempty"`
 	ModelRouter                       bool                         `json:"model_router"`
 	Executor                          bool                         `json:"executor"`
 	ExecutorModelScope                pluginapi.ExecutorModelScope `json:"executor_model_scope"`
@@ -224,6 +227,19 @@ func schedulerWantsAcrossPriorities(caps pluginapi.Capabilities) bool {
 	return false
 }
 
+func schedulerWantsLookupCandidates(caps pluginapi.Capabilities) bool {
+	if caps.Scheduler == nil {
+		return false
+	}
+	if caps.SchedulerLookupCandidates {
+		return true
+	}
+	if opt, ok := caps.Scheduler.(interface{ SchedulerWantsLookupCandidates() bool }); ok && opt != nil {
+		return opt.SchedulerWantsLookupCandidates()
+	}
+	return false
+}
+
 func rpcCapabilitiesFromPlugin(plugin pluginapi.Plugin) rpcCapabilities {
 	caps := plugin.Capabilities
 	return rpcCapabilities{
@@ -236,6 +252,7 @@ func rpcCapabilitiesFromPlugin(plugin pluginapi.Plugin) rpcCapabilities {
 		FrontendAuthOmitBody:              frontendAuthProviderWantsOmitBody(caps),
 		Scheduler:                         caps.Scheduler != nil,
 		SchedulerAcrossPriorities:         schedulerWantsAcrossPriorities(caps),
+		SchedulerLookupCandidates:         schedulerWantsLookupCandidates(caps),
 		ModelRouter:                       caps.ModelRouter != nil,
 		Executor:                          caps.Executor != nil,
 		ExecutorModelScope:                normalizedExecutorModelScope(caps),
