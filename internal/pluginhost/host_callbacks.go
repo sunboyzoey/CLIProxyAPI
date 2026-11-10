@@ -184,6 +184,14 @@ func (h *Host) callFromPlugin(ctx context.Context, method string, request []byte
 		return h.callHostAuthGetRuntime(ctx, request)
 	case "host.auth.probe_credentials":
 		return h.callHostNativeProbeCredentials(ctx, request)
+	case "host.auth.native_concurrency_get":
+		return h.callHostNativeConcurrency(ctx, request, false)
+	case "host.auth.native_concurrency_set":
+		return h.callHostNativeConcurrency(ctx, request, true)
+	case "host.auth.native_concurrency_list":
+		return h.callHostNativeConcurrencyList(ctx, request)
+	case "host.auth.native_quota":
+		return h.nativeAccountQuota(ctx, request)
 	case "host.auth.bps_probe_credentials":
 		return h.callHostBPSProbeCredentials(ctx, request)
 	case pluginabi.MethodHostAuthSave:

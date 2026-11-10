@@ -1661,6 +1661,8 @@ type ManagementResponse struct {
 type UsageRecord struct {
 	// RequestID uniquely identifies this specific model execution instance (UUID v4).
 	RequestID string
+	// Supplemental marks an additional-model accounting record, not a new execution.
+	Supplemental bool
 	// TraceID identifies the parent inbound HTTP request when available (8-character hex).
 	TraceID string
 	// SelectionID identifies the scheduler selection decision that produced this usage record when available.
@@ -1689,6 +1691,9 @@ type UsageRecord struct {
 	AuthID string
 	// AuthIndex identifies the credential index when applicable.
 	AuthIndex string
+	// AuthIdentity is the stable OAuth subject/account hash captured by the executor.
+	// It is empty when the host cannot establish a supported OAuth identity.
+	AuthIdentity string
 	// AuthType identifies the credential type.
 	AuthType string
 	// Source identifies the request source or integration.
@@ -1704,6 +1709,8 @@ type UsageRecord struct {
 	ResponseServiceTier string
 	// ResponseModel stores the model name reported by the upstream response, empty when unknown.
 	ResponseModel string
+	// ResponseStatus preserves a provider terminal status (completed, incomplete, failed).
+	ResponseStatus string
 	// Generate reports whether the client requested actual generation.
 	// The host normalizes omitted usage.Record values to true before delivery.
 	Generate bool
@@ -1727,14 +1734,28 @@ type UsageRecord struct {
 
 // UsageFailure describes an upstream or executor failure.
 type UsageFailure struct {
+	// Code carries a sanitized executor failure category, when available.
+	Code string
 	// StatusCode is the HTTP status code associated with the failure.
 	StatusCode int
 	// Body contains the failure response body or message.
 	Body string
 }
 
+// UsageObservedTokens preserves measured counters without treating missing values as zero.
+type UsageObservedTokens struct {
+	InputTokens         *int64
+	OutputTokens        *int64
+	ReasoningTokens     *int64
+	TotalTokens         *int64
+	CacheReadTokens     *int64
+	CacheCreationTokens *int64
+}
+
 // UsageDetail contains token accounting counters.
 type UsageDetail struct {
+	// Observed is available only for provider paths that preserve field presence.
+	Observed *UsageObservedTokens
 	// InputTokens is the prompt or input token count.
 	InputTokens int64
 	// OutputTokens is the completion or output token count.

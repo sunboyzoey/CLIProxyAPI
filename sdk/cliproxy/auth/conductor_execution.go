@@ -584,7 +584,11 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	attempted := make(map[string]struct{})
 	var lastErr error
 	var upstreamErr error
+	var nativeLease *nativeConcurrencyLease
+	defer func() { nativeLease.release() }()
 	for {
+		nativeLease.release()
+		nativeLease = nil
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -598,7 +602,8 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			pickOpts = withHomeAuthCount(pickOpts, homeAuthCount)
 			pickOpts = withHomeExcludedAuthIDs(pickOpts, tried)
 		}
-		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
+		auth, executor, provider, admittedLease, errPick := m.pickNextMixedAdmitted(ctx, providers, routeModel, pickOpts, tried)
+		nativeLease = admittedLease
 		if errPick != nil {
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -802,7 +807,11 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	attempted := make(map[string]struct{})
 	var lastErr error
 	var upstreamErr error
+	var nativeLease *nativeConcurrencyLease
+	defer func() { nativeLease.release() }()
 	for {
+		nativeLease.release()
+		nativeLease = nil
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -816,7 +825,8 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			pickOpts = withHomeAuthCount(pickOpts, homeAuthCount)
 			pickOpts = withHomeExcludedAuthIDs(pickOpts, tried)
 		}
-		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
+		auth, executor, provider, admittedLease, errPick := m.pickNextMixedAdmitted(ctx, providers, routeModel, pickOpts, tried)
+		nativeLease = admittedLease
 		if errPick != nil {
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
 				return cliproxyexecutor.Response{}, preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -1030,8 +1040,12 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	attempted := make(map[string]struct{})
 	var lastErr error
 	var upstreamErr error
+	var nativeLease *nativeConcurrencyLease
+	defer func() { nativeLease.release() }()
 	var roundTiming homeRetryRoundTiming
 	for {
+		nativeLease.release()
+		nativeLease = nil
 		allowSameAuthRetry := homeMode && homeSameAuthRetryPending && lastHomeAuthID != "" && homeSameAuthRetries[lastHomeAuthID] == 0
 		if maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials && !allowSameAuthRetry {
 			if lastErr != nil {
@@ -1064,7 +1078,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				provider = selection.Provider
 			}
 		} else {
-			auth, executor, provider, errPick = m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
+			auth, executor, provider, nativeLease, errPick = m.pickNextMixedAdmitted(ctx, providers, routeModel, pickOpts, tried)
 		}
 		if errPick != nil {
 			preferredErr := preferredExecutionAttemptError(lastErr, upstreamErr)
@@ -1348,6 +1362,11 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 				return wrapHomeStream(ctx, streamResult, nil, releaseAttempt), nil
 			}
 			return wrapHomeStream(ctx, streamResult, selection, releaseAttempt), nil
+		}
+		if nativeLease != nil {
+			release := nativeLease.release
+			nativeLease = nil
+			return wrapHomeStream(ctx, streamResult, nil, release), nil
 		}
 		return streamResult, nil
 	}

@@ -397,7 +397,9 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 			selected = selection.CloneAuth()
 		}
 	} else {
-		selected, err = s.handlers.AuthManager.SelectAuthWithCredentialPolicy(ctx, "codex", selectionModel, auth.CredentialPolicyCodexAlphaSearchV1, selectionOpts)
+		var releaseNative func()
+		selected, releaseNative, err = s.handlers.AuthManager.AcquireAuthWithCredentialPolicy(ctx, "codex", selectionModel, auth.CredentialPolicyCodexAlphaSearchV1, selectionOpts)
+		defer releaseNative()
 	}
 	if err != nil {
 		status := clienterror.HTTPStatusFromErrorOr(err, http.StatusServiceUnavailable)
