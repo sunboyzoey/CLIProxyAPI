@@ -55,25 +55,40 @@ func (h *Host) nativeAccountQuota(ctx context.Context, request []byte) ([]byte, 
 	expectedID := strings.TrimSpace(doc.Get("expected_auth_id").String())
 	expectedAccount := doc.Get("expected_account_id").String()
 	expectedSubject := doc.Get("expected_subject").String()
-	if index == "" || expectedID == "" || expectedAccount == "" || expectedSubject == "" {
+	expectedIdentity := strings.TrimSpace(doc.Get("expected_identity").String())
+	background := expectedIdentity != ""
+	if expectedID == "" || !background && (index == "" || expectedAccount == "" || expectedSubject == "") {
 		return nil, errors.New("codex_quota_identity_required")
 	}
-	operation, errAcquire := h.acquireHostHTTPOperation(ctx, doc.Get("host_callback_id").String(), "")
+	operation, errAcquire := h.acquireHostHTTPOperation(ctx, doc.Get("host_callback_id").String(), doc.Get("operation_id").String())
 	if errAcquire != nil {
 		return nil, errors.New("codex_quota_callback_unavailable")
 	}
 	defer operation.finish()
 	ctx = operation.ctx
 	manager := h.currentAuthManager()
-	auth, errAuth := h.authByIndex(index)
-	if manager == nil || errAuth != nil || auth == nil || auth.ID != expectedID {
+	var auth *coreauth.Auth
+	if manager != nil {
+		if background {
+			auth, _ = manager.GetByID(expectedID)
+		} else {
+			auth, _ = h.authByIndex(index)
+		}
+	}
+	if auth == nil || auth.ID != expectedID {
 		return nil, errors.New("codex_quota_identity_changed")
 	}
 	account, subject, identity := nativeQuotaIdentity(auth)
 	if identity == "" {
 		return nil, errors.New("codex_quota_oauth_required")
 	}
-	if account != expectedAccount || subject != expectedSubject {
+	if background {
+		// Resolve current credentials in CPA without querying a replaced grant.
+		if identity != expectedIdentity || auth.Disabled {
+			return nil, errors.New("codex_quota_identity_changed")
+		}
+		index = auth.Index
+	} else if account != expectedAccount || subject != expectedSubject {
 		return nil, errors.New("codex_quota_identity_changed")
 	}
 	// Only credential acquisition has a deadline. The upstream request follows
@@ -102,7 +117,7 @@ func (h *Host) nativeAccountQuota(ctx context.Context, request []byte) ([]byte, 
 	}
 	matches := func(a *coreauth.Auth) bool {
 		_, _, current := nativeQuotaIdentity(a)
-		return a != nil && a.ID == auth.ID && a.Index == index && a.RegistrationEpoch == auth.RegistrationEpoch && current == identity
+		return a != nil && a.ID == auth.ID && a.Index == index && a.RegistrationEpoch == auth.RegistrationEpoch && current == identity && (!background || !a.Disabled)
 	}
 	latest, exists := manager.GetByID(auth.ID)
 	if !exists || !matches(ready) || !matches(latest) {

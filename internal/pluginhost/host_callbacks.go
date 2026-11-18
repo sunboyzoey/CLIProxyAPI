@@ -3,6 +3,7 @@ package pluginhost
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -55,9 +56,10 @@ type rpcHostHTTPStreamReadRequest struct {
 }
 
 type rpcHostHTTPStreamReadResponse struct {
-	Payload []byte `json:"payload,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Done    bool   `json:"done,omitempty"`
+	Payload   []byte `json:"payload,omitempty"`
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Done      bool   `json:"done,omitempty"`
 }
 
 type rpcHostHTTPStreamCloseRequest struct {
@@ -362,6 +364,9 @@ func (h *Host) callHostHTTPStreamRead(ctx context.Context, request []byte) ([]by
 	}
 	chunk, done, errRead := h.httpStreams.read(ctx, hostCallbackPluginIDFromContext(ctx), hostCallbackInstanceFromContext(ctx), req.StreamID)
 	if errRead != nil {
+		if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
+			return marshalRPCResult(rpcHostHTTPStreamReadResponse{Error: errRead.Error(), ErrorCode: httpStreamErrorCode(errRead), Done: true})
+		}
 		return nil, errRead
 	}
 	resp := rpcHostHTTPStreamReadResponse{
@@ -370,9 +375,26 @@ func (h *Host) callHostHTTPStreamRead(ctx context.Context, request []byte) ([]by
 	}
 	if chunk.Err != nil {
 		resp.Error = chunk.Err.Error()
+		resp.ErrorCode = httpStreamErrorCode(chunk.Err)
 		resp.Done = true
 	}
 	return marshalRPCResult(resp)
+}
+
+// Preserve typed transport causes without parsing or exporting arbitrary messages.
+func httpStreamErrorCode(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context_deadline_exceeded"
+	default:
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			return "transport_timeout"
+		}
+		return "transport_read_failed"
+	}
 }
 
 func (h *Host) callHostHTTPStreamClose(ctx context.Context, request []byte) ([]byte, error) {
