@@ -198,6 +198,9 @@ func (h *Host) interceptRequest(ctx context.Context, req pluginapi.RequestInterc
 		if resp, ok := h.callRequestInterceptor(ctx, record, method, func(callCtx context.Context, callReq pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
 			return invoke(interceptor, callCtx, callReq)
 		}, nextReq); ok {
+			if !beforeAuth && (resp.UpstreamTransport == "http" || resp.UpstreamTransport == "websocket") {
+				current.UpstreamTransport = resp.UpstreamTransport
+			}
 			current.Headers = mergeHeaders(current.Headers, resp.Headers, resp.ClearHeaders)
 			if len(resp.ClearHeaders) > 0 {
 				current.ClearHeaders = append(current.ClearHeaders, resp.ClearHeaders...)

@@ -8,11 +8,13 @@ import (
 )
 
 type rpcLifecycleRequest struct {
-	ConfigYAML            []byte `json:"config_yaml"`
-	SchemaVersion         uint32 `json:"schema_version"`
-	MultiAuthProviders    bool   `json:"multi_auth_providers,omitempty"`
-	CredentialScopeErrors bool   `json:"credential_scope_errors,omitempty"`
-	RequestScopeErrors    bool   `json:"request_scope_errors,omitempty"`
+	// Version 1 includes typed transport policy and native no-replay protection.
+	CodexHTTPWebsocketPolicyVersion uint32 `json:"codex_http_websocket_policy_version,omitempty"`
+	ConfigYAML                      []byte `json:"config_yaml"`
+	SchemaVersion                   uint32 `json:"schema_version"`
+	MultiAuthProviders              bool   `json:"multi_auth_providers,omitempty"`
+	CredentialScopeErrors           bool   `json:"credential_scope_errors,omitempty"`
+	RequestScopeErrors              bool   `json:"request_scope_errors,omitempty"`
 }
 
 type rpcRegistration struct {

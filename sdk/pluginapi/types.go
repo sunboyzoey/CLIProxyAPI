@@ -1463,6 +1463,10 @@ type ResponseTransformRequest struct {
 
 // RequestInterceptRequest describes a request about to be executed upstream.
 type RequestInterceptRequest struct {
+	// Provider and AuthID identify the selected attempt after authentication.
+	// They are empty in before-auth calls and contain no credential secrets.
+	Provider string
+	AuthID   string
 	// RequestID uniquely identifies one model execution and correlates it with RequestCompletion.
 	RequestID string
 	// TraceID identifies the parent inbound HTTP request when available.
@@ -1490,6 +1494,10 @@ type RequestInterceptRequest struct {
 
 // RequestInterceptResponse returns request modifications.
 type RequestInterceptResponse struct {
+	// UpstreamTransport optionally selects http or websocket after auth selection.
+	// Hosts must advertise codex_http_websocket_policy_version >= 1; unsupported
+	// providers and request shapes retain their native eligibility restrictions.
+	UpstreamTransport string `json:"upstream_transport,omitempty"`
 	// Path optionally overrides the target request path (e.g. "/v1/images/generations").
 	Path string `json:"path,omitempty"`
 	// Headers replaces matching current request headers and preserves headers not mentioned here.

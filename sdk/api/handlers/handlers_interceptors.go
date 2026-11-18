@@ -643,6 +643,8 @@ func (h *BaseAPIHandler) applyRequestInterceptorsAfterAuth(ctx context.Context, 
 		return coreexecutor.RequestAfterAuthInterceptResponse{}
 	}
 	resp := interceptRequestAfterAuth(ctx, host, pluginapi.RequestInterceptRequest{
+		Provider:       req.Provider,
+		AuthID:         req.AuthID,
 		RequestID:      requestID,
 		TraceID:        logging.GetRequestID(ctx),
 		SourceFormat:   req.SourceFormat.String(),
@@ -656,14 +658,15 @@ func (h *BaseAPIHandler) applyRequestInterceptorsAfterAuth(ctx context.Context, 
 		Metadata:       req.Metadata,
 	}, skipPluginID)
 	return coreexecutor.RequestAfterAuthInterceptResponse{
-		Path:            strings.TrimSpace(resp.Path),
-		Headers:         resp.Headers,
-		Body:            resp.Body,
-		ClearHeaders:    resp.ClearHeaders,
-		Terminate:       resp.Terminate,
-		StatusCode:      normalizedTerminationStatus(resp.StatusCode),
-		ResponseHeaders: resp.ResponseHeaders,
-		ResponseBody:    resp.ResponseBody,
+		UpstreamTransport: resp.UpstreamTransport,
+		Path:              strings.TrimSpace(resp.Path),
+		Headers:           resp.Headers,
+		Body:              resp.Body,
+		ClearHeaders:      resp.ClearHeaders,
+		Terminate:         resp.Terminate,
+		StatusCode:        normalizedTerminationStatus(resp.StatusCode),
+		ResponseHeaders:   resp.ResponseHeaders,
+		ResponseBody:      resp.ResponseBody,
 	}
 }
 

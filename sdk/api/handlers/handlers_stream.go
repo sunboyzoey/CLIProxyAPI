@@ -592,7 +592,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	}
 
 	bootstrapEligible := func(err error) bool {
-		if coreauth.IsContinuityTerminatedError(err) {
+		if coreauth.IsContinuityTerminatedError(err) || coreauth.IsRequestStopError(err) {
 			return false
 		}
 		status := statusFromError(err)

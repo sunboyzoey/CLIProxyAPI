@@ -57,7 +57,9 @@ func (e requestStopError) IsRequestStop() bool {
 	return true
 }
 
-func isRequestStopError(err error) bool {
+// IsRequestStopError reports whether execution must not be retried, including
+// when an upstream may already have accepted a tool-bearing request.
+func IsRequestStopError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -401,3 +403,5 @@ func (m *Manager) ApplyRequestScopedErrorResult(ctx context.Context, auth *Auth,
 func isRequestScopedStop(action string, okAction bool) bool {
 	return okAction && (action == RequestScopedActionStop || action == RequestScopedActionStopAndCooldown)
 }
+
+func isRequestStopError(err error) bool { return IsRequestStopError(err) }

@@ -126,11 +126,12 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 		return pluginapi.Plugin{}, fmt.Errorf("plugin client is nil")
 	}
 	resp, errCall := callPlugin[rpcRegistration](ctx, client, method, rpcLifecycleRequest{
-		ConfigYAML:            bytes.Clone(configYAML),
-		SchemaVersion:         pluginabi.SchemaVersion,
-		MultiAuthProviders:    pluginabi.SchemaVersion >= pluginabi.SchemaVersionMultiAuthProviders,
-		CredentialScopeErrors: true,
-		RequestScopeErrors:    true,
+		CodexHTTPWebsocketPolicyVersion: 1,
+		ConfigYAML:                      bytes.Clone(configYAML),
+		SchemaVersion:                   pluginabi.SchemaVersion,
+		MultiAuthProviders:              pluginabi.SchemaVersion >= pluginabi.SchemaVersionMultiAuthProviders,
+		CredentialScopeErrors:           true,
+		RequestScopeErrors:              true,
 	})
 	if errCall != nil {
 		return pluginapi.Plugin{}, errCall

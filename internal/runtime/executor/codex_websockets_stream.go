@@ -24,6 +24,13 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	httpBridge := helps.IsCodexHTTPWebsocket(ctx)
+	requestSent := false
+	defer func() {
+		if httpBridge && requestSent {
+			err = helps.CodexHTTPWebsocketSentError(err)
+		}
+	}()
 	ctx = helps.WithCodexCommentaryPolicy(ctx, e.cfg)
 	if opts.Alt == "responses/compact" {
 		return nil, statusErr{code: http.StatusBadRequest, msg: "streaming not supported for /responses/compact"}
@@ -63,6 +70,12 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	if err != nil {
 		return nil, err
 	}
+	if httpBridge {
+		previous := ojson.GetBytesNoCopy(prepared.clientBody, "previous_response_id")
+		if previous.Exists() && previous.Raw != "null" && previous.Raw != "\"\"" {
+			return nil, statusErr{code: http.StatusBadRequest, msg: "http_sse_websockets requires a full-context request without previous_response_id"}
+		}
+	}
 	if prepared.upstreamModel != "" && prepared.upstreamModel != baseModel {
 		reporter.SetUpstreamModel(prepared.upstreamModel)
 	}
@@ -86,6 +99,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	authType, authValue = auth.AccountInfo()
 
 	executionSessionID := executionSessionIDFromOptions(opts)
+	if httpBridge {
+		executionSessionID = ""
+	}
 	var sess *codexWebsocketSession
 	isEphemeralSession := false
 	if executionSessionID != "" {
@@ -159,9 +175,13 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			return nil, codexWebsocketTurnEventID(errDial, originalPayload)
 		}
 		bodyErr := recordWebsocketDialFailure(ctx, e.cfg, wsReqLog, respHS, errDial)
+		if httpBridge && opts.ExecutionLifecycle == nil && helps.CodexHTTPWebsocketHandshakeFallback(ctx, respHS) {
+			unlockStreamSession()
+			return e.CodexExecutor.ExecuteStream(ctx, auth, req, opts)
+		}
 		if respHS != nil && respHS.StatusCode == http.StatusUpgradeRequired {
 			unlockStreamSession()
-			if opts.ExecutionLifecycle == nil && !cliproxyexecutor.DownstreamWebsocket(ctx) {
+			if !httpBridge && opts.ExecutionLifecycle == nil && !cliproxyexecutor.DownstreamWebsocket(ctx) {
 				return e.CodexExecutor.ExecuteStream(ctx, auth, req, opts)
 			}
 			if cliproxyexecutor.UpstreamAttempted(dialCtx) {
@@ -205,6 +225,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 	}
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
+	requestSent = true
 	if errSend := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSend != nil {
 		errSend = mapCodexWebsocketWriteError(sess, conn, errSend)
 		helps.RecordAPIWebsocketError(ctx, e.cfg, "send", errSend)
@@ -306,7 +327,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		return e.streamCodexDuplex(ctx, auth, req, opts, sess, conn, readCh, input, prepared, reporter, upstreamHeaders, unlockStreamSession), nil
 	}
 
-	buffering := e.cfg != nil && e.cfg.Codex.StreamBootstrapBuffering
+	buffering := !httpBridge && e.cfg != nil && e.cfg.Codex.StreamBootstrapBuffering
 	var bootstrapTimeout time.Duration
 	var bootstrapStart time.Time
 	var exhaustionLogged bool
@@ -654,6 +675,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}()
 
 		send := func(chunk cliproxyexecutor.StreamChunk) bool {
+			if httpBridge {
+				chunk.Err = helps.CodexHTTPWebsocketSentError(chunk.Err)
+			}
 			if ctx == nil {
 				out <- chunk
 				return true
@@ -682,6 +706,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 					return
 				}
 				mappedErr := codexWebsocketTurnEventID(mapCodexWebsocketReadError(errRead), originalPayload)
+				if httpBridge {
+					mappedErr = statusErr{code: http.StatusBadGateway, msg: "{\"error\":{\"type\":\"upstream_error\",\"code\":\"upstream_stream_incomplete\",\"message\":\"Upstream websocket closed before the response completed\"}}"}
+				}
 				terminateReason = "read_error"
 				terminateErr = mappedErr
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "read", mappedErr)

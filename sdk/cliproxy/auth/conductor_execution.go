@@ -728,8 +728,11 @@ func applyRequestAfterAuthInterceptor(ctx context.Context, executor ProviderExec
 	if opts.RequestAfterAuthInterceptor == nil {
 		return req, opts, nil
 	}
+	authID, _ := opts.Metadata[cliproxyexecutor.SelectedAuthMetadataKey].(string)
 	toFormat := requestToFormat(provider, executor, req, opts)
 	resp := opts.RequestAfterAuthInterceptor(ctx, cliproxyexecutor.RequestAfterAuthInterceptRequest{
+		Provider:       provider,
+		AuthID:         authID,
 		SourceFormat:   opts.SourceFormat,
 		ToFormat:       toFormat,
 		Model:          req.Model,
@@ -739,6 +742,12 @@ func applyRequestAfterAuthInterceptor(ctx context.Context, executor ProviderExec
 		Body:           req.Payload,
 		Metadata:       opts.Metadata,
 	})
+	// Re-evaluate on each selected attempt; do not inherit another auth policy.
+	opts.UpstreamTransport = ""
+	switch resp.UpstreamTransport {
+	case "http", "websocket":
+		opts.UpstreamTransport = resp.UpstreamTransport
+	}
 	opts.Headers = mergeRequestHeaders(opts.Headers, resp.Headers, resp.ClearHeaders)
 	if len(resp.Body) > 0 {
 		req.Payload = resp.Body
