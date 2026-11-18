@@ -98,6 +98,46 @@ func TestSchedulerLookupRevalidatesSelectedAccountAfterCallback(t *testing.T) {
 
 func (s *lookupTestScheduler) SchedulerWantsLookupCandidates() bool { return s.lookup }
 
+func TestSchedulerLookupPreservesExcludedCandidateFallback(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		for _, delegate := range []string{"", pluginapi.SchedulerBuiltinFillFirst} {
+			name := map[bool]string{false: "single", true: "mixed"}[mixed] + "/" + delegate
+			t.Run(name, func(t *testing.T) {
+				m := NewManager(nil, &FillFirstSelector{}, nil)
+				m.RegisterExecutor(schedulerTestExecutor{provider: "gemini"})
+				for _, candidate := range []*Auth{
+					{ID: "lookup-excluded", Provider: "gemini", Attributes: map[string]string{"priority": "100"}},
+					{ID: "lookup-fallback", Provider: "gemini", Attributes: map[string]string{"priority": "50"}},
+				} {
+					if _, errRegister := m.Register(t.Context(), candidate); errRegister != nil {
+						t.Fatal(errRegister)
+					}
+				}
+				scheduler := &lookupTestScheduler{lookup: true}
+				scheduler.acrossPriorities = true
+				scheduler.pick = func(_ context.Context, req pluginapi.SchedulerPickRequest) (pluginapi.SchedulerPickResponse, bool, error) {
+					if !req.LookupCandidatesProvided || len(req.LookupCandidates) != 2 {
+						t.Fatalf("lookup candidates were lost: %+v", req.LookupCandidates)
+					}
+					return pluginapi.SchedulerPickResponse{
+						Handled: delegate != "", DelegateBuiltin: delegate,
+						ExcludeCandidates: []string{"lookup-excluded"},
+					}, delegate != "", nil
+				}
+				m.SetPluginScheduler(scheduler)
+				tried := map[string]struct{}{"unrelated": {}}
+				got, errPick := lookupTestPick(m, mixed, t.Context(), "", cliproxyexecutor.Options{}, tried)
+				if errPick != nil || got == nil || got.ID != "lookup-fallback" {
+					t.Fatalf("excluded candidate fallback = %v, %v", got, errPick)
+				}
+				if len(tried) != 1 || scheduler.calls != 1 {
+					t.Fatalf("unexpected mutation or callback replay: tried=%v calls=%d", tried, scheduler.calls)
+				}
+			})
+		}
+	}
+}
+
 func lookupTestPick(m *Manager, mixed bool, ctx context.Context, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, error) {
 	if mixed {
 		a, _, _, err := m.pickNextMixed(ctx, []string{"gemini"}, model, opts, tried)
