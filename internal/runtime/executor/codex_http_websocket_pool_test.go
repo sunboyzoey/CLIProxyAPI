@@ -463,3 +463,51 @@ func TestCodexHTTPWebsocketPoolCancellationDuringLifecycleBind(t *testing.T) {
 		t.Fatal("cancelled lifecycle sent or replayed a request")
 	}
 }
+
+func TestCodexHTTPWebsocketPoolSessionInstructionsFullContext(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprint(configured), func(t *testing.T) {
+			captured := make(chan []byte, 2)
+			server := newPoolMockServer(t, func(conn *websocket.Conn, id, turn int, body []byte) bool {
+				captured <- bytes.Clone(body)
+				return poolCompleted(conn, id, turn)
+			})
+			cfg := &config.Config{}
+			if configured {
+				cfg.Payload.Override = []config.PayloadRule{{Models: []config.PayloadModelRule{{Name: "*"}}, Params: map[string]any{"input.0.content.0.text": "configured-prefix", "instructions": "configured-instructions"}}}
+			}
+			exec := poolTestExecutor(t, cfg)
+			a := httpWSAuth(server.url)
+			req, opts := httpWSRequest()
+			opts.Headers = http.Header{"Session-Id": {t.Name()}}
+			opts.Metadata = map[string]any{core.CallerScopeMetadataKey: "pool-caller"}
+			for _, mode := range []string{"start", "reuse"} {
+				doc := ojson.NewDocString("{}")
+				_ = doc.Set("stream", true)
+				_ = doc.Set("input", "hi")
+				_ = doc.Set("client_metadata.cpa_session_instructions", mode)
+				if mode == "start" {
+					_ = doc.Set("instructions", "baseline")
+				}
+				req.Payload = doc.Bytes()
+				if _, err := collectPoolStream(t.Context(), exec, a, req, opts); err != nil {
+					t.Fatal(err)
+				}
+				body := <-captured
+				wantPrefix, wantInstructions := "baseline", ""
+				if configured {
+					wantPrefix, wantInstructions = "configured-prefix", "configured-instructions"
+				}
+				if ojson.GetBytes(body, "input.0.content.0.text").String() != wantPrefix || ojson.GetBytes(body, "instructions").String() != wantInstructions {
+					t.Fatalf("full-context instructions or final payload rules lost: %s", body)
+				}
+				if ojson.GetBytes(body, "client_metadata.cpa_session_instructions").Exists() || ojson.GetBytes(body, "previous_response_id").Exists() {
+					t.Fatalf("connection-bound state leaked into an HTTP bridge turn: %s", body)
+				}
+			}
+			if server.upgrades.Load() != 1 {
+				t.Fatalf("session instruction turns failed to reuse connection: %d", server.upgrades.Load())
+			}
+		})
+	}
+}

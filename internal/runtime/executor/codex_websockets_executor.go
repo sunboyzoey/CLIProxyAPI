@@ -273,6 +273,14 @@ func (e *CodexWebsocketsExecutor) InterruptExecutionSession(ctx context.Context,
 	if !authEnabled {
 		return fmt.Errorf("websocket credential is no longer enabled")
 	}
+	if ojson.GetBytesNoCopy(payload, "client_metadata").Exists() {
+		doc := ojson.NewDoc(payload)
+		helps.StripCodexSessionInstructionMarker(doc, sdktranslator.FormatOpenAIResponse)
+		payload = doc.Bytes()
+		if errMarker := helps.ValidateCodexSessionInstructionMarker(payload, sdktranslator.FormatOpenAIResponse); errMarker != nil {
+			return errMarker
+		}
+	}
 	if errWrite := writeCodexWebsocketMessage(sess, conn, payload); errWrite != nil {
 		return errWrite
 	}

@@ -242,13 +242,23 @@ func TestHubAuth_MethodAndCredentials(t *testing.T) {
 			t.Fatalf("Dial client without type error = %v", errCli)
 		}
 		registerCleanupConn(t, cliCheck)
-		listFrame := readTextJSONFrame(t, cliCheck)
-		if listFrame.Get("servers.#").Int() != 2 ||
-			listFrame.Get("servers.0.uuid").String() != "hdr-srv-1" ||
-			listFrame.Get("servers.0.type").String() != "Header-Type-01" ||
-			listFrame.Get("servers.1.uuid").String() != "hdr-srv-2" ||
-			listFrame.Get("servers.1.type").String() != "Query-Type" {
-			t.Fatalf("unexpected server_list types: %s", listFrame.Raw)
+		// The handshake can finish before server registration. Collect both the
+		// initial snapshot and subsequent announcements before checking types.
+		serverTypes := make(map[string]string)
+		for len(serverTypes) < 2 {
+			frame := readTextJSONFrame(t, cliCheck)
+			switch frame.Get("type").String() {
+			case ControlTypeServerList:
+				for _, server := range frame.Get("servers").Array() {
+					serverTypes[server.Get("uuid").String()] = server.Get("type").String()
+				}
+			case ControlTypeServerOnline:
+				server := frame.Get("server")
+				serverTypes[server.Get("uuid").String()] = server.Get("type").String()
+			}
+		}
+		if serverTypes["hdr-srv-1"] != "Header-Type-01" || serverTypes["hdr-srv-2"] != "Query-Type" {
+			t.Fatalf("unexpected server types: %v", serverTypes)
 		}
 
 		cliWithBlankType, cliBlankResp, errCliBlank := websocket.DefaultDialer.Dial(

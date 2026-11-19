@@ -52,7 +52,8 @@ func (c *websocketConnectionCloser) Close() error {
 }
 
 type codexWebsocketSession struct {
-	sessionID string
+	sessionInstructions helps.CodexInstructionChain
+	sessionID           string
 	// httpPool is immutable; poolClosed and handshakeHeaders are protected by connMu.
 	httpPool         *helps.HTTPWebsocketPool[*codexWebsocketSession]
 	poolClosed       bool
