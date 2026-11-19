@@ -1276,16 +1276,17 @@ func openAICompatStreamDataError(payload []byte, eventName string) (statusErr, b
 }
 
 type statusErr struct {
-	code               int
-	msg                string
-	retryAfter         *time.Duration
-	credentialScoped   bool
-	streamTruncated    bool
-	transientRateLimit bool
-	transientTransport bool
-	tosViolation       bool
-	tosAppealURL       string
-	tosAppealURLText   string
+	code                       int
+	msg                        string
+	retryAfter                 *time.Duration
+	credentialScoped           bool
+	streamTruncated            bool
+	transientRateLimit         bool
+	transientTransport         bool
+	websocketHandshakeRejected bool
+	tosViolation               bool
+	tosAppealURL               string
+	tosAppealURLText           string
 	// diagnostic is a content-free detail for logs only; it never reaches clients.
 	diagnostic string
 }
@@ -1338,6 +1339,9 @@ func (e statusErr) ErrorCode() string {
 	}
 	if e.transientTransport {
 		return cliproxyauth.ErrorCodeTransientTransport
+	}
+	if e.websocketHandshakeRejected {
+		return cliproxyauth.ErrorCodeWebsocketHandshakeRejected
 	}
 	return ""
 }

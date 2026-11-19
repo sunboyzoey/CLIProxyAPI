@@ -205,7 +205,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			cliproxyexecutor.MarkUpstreamAttempt(ctx)
 		}
 		if respHS != nil && respHS.StatusCode > 0 {
-			return resp, newCodexStatusErrWithHeadersAndCooling(respHS.StatusCode, respHS.Header, bodyErr, e.modelLevelCooling())
+			return resp, newCodexWebsocketHandshakeStatusErr(respHS, bodyErr, e.modelLevelCooling())
 		}
 		return resp, errDial
 	}
@@ -293,7 +293,10 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 					return resp, errSendRetry
 				}
 			} else {
-				_ = recordWebsocketDialRetryFailure(ctx, e.cfg, wsReqLog, respHSRetry, errDialRetry)
+				bodyErr := recordWebsocketDialRetryFailure(ctx, e.cfg, wsReqLog, respHSRetry, errDialRetry)
+				if respHSRetry != nil && respHSRetry.StatusCode > 0 {
+					return resp, newCodexWebsocketHandshakeStatusErr(respHSRetry, bodyErr, e.modelLevelCooling())
+				}
 				return resp, errDialRetry
 			}
 		} else {

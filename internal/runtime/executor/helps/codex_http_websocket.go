@@ -9,20 +9,22 @@ import (
 
 type codexHTTPWebsocketKey struct{}
 
+type codexHTTPWebsocketState struct{ generatedSession string }
+
 // WithCodexHTTPWebsocket identifies the opt-in HTTP SSE to upstream WS bridge.
 func WithCodexHTTPWebsocket(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, codexHTTPWebsocketKey{}, true)
+	return context.WithValue(ctx, codexHTTPWebsocketKey{}, &codexHTTPWebsocketState{})
 }
 
 func IsCodexHTTPWebsocket(ctx context.Context) bool {
 	if ctx == nil {
 		return false
 	}
-	enabled, _ := ctx.Value(codexHTTPWebsocketKey{}).(bool)
-	return enabled
+	state, _ := ctx.Value(codexHTTPWebsocketKey{}).(*codexHTTPWebsocketState)
+	return state != nil
 }
 
 type codexHTTPWebsocketSentError struct{ cause error }
@@ -80,4 +82,18 @@ func CodexHTTPWebsocketHandshakeFallback(ctx context.Context, resp *http.Respons
 	default:
 		return false
 	}
+}
+
+// SetGeneratedHTTPWebsocketSession records the random fallback during preparation,
+// before request state is handed to background goroutines.
+func SetGeneratedHTTPWebsocketSession(ctx context.Context, id string) {
+	if state, ok := ctx.Value(codexHTTPWebsocketKey{}).(*codexHTTPWebsocketState); ok {
+		state.generatedSession = id
+	}
+}
+func GeneratedHTTPWebsocketSession(ctx context.Context) string {
+	if state, ok := ctx.Value(codexHTTPWebsocketKey{}).(*codexHTTPWebsocketState); ok {
+		return state.generatedSession
+	}
+	return ""
 }

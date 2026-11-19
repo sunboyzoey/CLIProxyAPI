@@ -1442,17 +1442,28 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 		t.Fatal(errBind)
 	}
 
+	t.Cleanup(func() {
+		close(release)
+		scope.End("test cleanup")
+	})
+
 	close(loseFirst)
+	// Wait for the replacement subscription, allowing heartbeat detection and retry jitter.
+	select {
+	case <-secondSubscribe:
+	case <-started:
+		t.Fatal("heartbeat failover started draining the blocking scope")
+	case <-serviceCtx.Done():
+		t.Fatal("heartbeat failover canceled the service run")
+	case <-time.After(5 * homeSubscriberRetryInitial):
+		t.Fatal("new subscription did not start while the old scope remained active")
+	}
 	select {
 	case <-started:
 		t.Fatal("heartbeat failover started draining the blocking scope")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
-	select {
-	case <-secondSubscribe:
-	case <-time.After(time.Second):
-		t.Fatal("new subscription did not start while the old scope remained active")
-	}
+
 	service.homeMu.Lock()
 	exposedRegistry := service.homeRegistry
 	service.homeMu.Unlock()
@@ -1466,11 +1477,13 @@ func TestServiceHeartbeatFailoverDoesNotDrainBlockingScope(t *testing.T) {
 	select {
 	case <-serviceCtx.Done():
 		t.Fatal("heartbeat failover canceled the service run")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
-
-	close(release)
-	scope.End("test cleanup")
+	select {
+	case <-started:
+		t.Fatal("heartbeat failover drained the blocking scope after the replacement ACK")
+	default:
+	}
 }
 
 func TestServiceShutdownDrainsDetachedRegistryDuringRetry(t *testing.T) {

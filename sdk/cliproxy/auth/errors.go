@@ -26,6 +26,10 @@ const connectionLifecycleErrorCode = ErrorCodeConnectionLifecycle
 // must skip credential cooldown and remain eligible for request-retry rounds.
 const ErrorCodeTransientTransport = "transient_transport"
 
+// ErrorCodeWebsocketHandshakeRejected identifies an unexplained empty HTTP 403
+// during WebSocket upgrade. It is not evidence of exhausted credential quota.
+const ErrorCodeWebsocketHandshakeRejected = "websocket_handshake_rejected"
+
 const transientTransportErrorCode = ErrorCodeTransientTransport
 
 // ErrorCodeForceCooldown marks failures that must enforce credential cooldown.
@@ -673,4 +677,8 @@ func WithCause(err *Error, cause error) error {
 		base:  err,
 		cause: cause,
 	}
+}
+
+func isWebsocketHandshakeRejectedResultError(err *Error) bool {
+	return err != nil && err.HTTPStatus == http.StatusForbidden && err.Code == ErrorCodeWebsocketHandshakeRejected
 }

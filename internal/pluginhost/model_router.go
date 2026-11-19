@@ -61,6 +61,11 @@ func (h *Host) RouteModelExcept(ctx context.Context, req pluginapi.ModelRouteReq
 			}
 			return resp, true
 		case pluginapi.ModelRouteTargetSelf, pluginapi.ModelRouteTargetExecutor:
+			// Alpha Search accepts only native Codex targets. Preserve an explicit
+			// self rejection for its handler instead of falling through routing.
+			if req.SourceFormat == "codex-alpha-search" && resp.TargetKind == pluginapi.ModelRouteTargetSelf && strings.TrimSpace(resp.Reason) != "" {
+				return resp, true
+			}
 			if !h.executorPluginReady(resp.Target, nextReq) {
 				log.WithFields(log.Fields{"plugin_id": record.id, "target_plugin_id": resp.Target}).Warn("pluginhost: model router returned unavailable executor plugin")
 				continue

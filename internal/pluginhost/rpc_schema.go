@@ -8,6 +8,8 @@ import (
 )
 
 type rpcLifecycleRequest struct {
+	// Version 1 finalizes OAuth search models and applies payload rules last.
+	CodexAlphaSearchPayloadVersion uint32 `json:"codex_alpha_search_payload_version,omitempty"`
 	// Version 1 includes typed transport policy and native no-replay protection.
 	CodexHTTPWebsocketPolicyVersion uint32 `json:"codex_http_websocket_policy_version,omitempty"`
 	ConfigYAML                      []byte `json:"config_yaml"`

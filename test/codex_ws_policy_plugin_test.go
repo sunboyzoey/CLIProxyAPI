@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -72,16 +73,26 @@ func TestCodexWSPolicyPluginHTTPIntegration(t *testing.T) {
 						t.Log(errClose)
 					}
 				}()
-				if _, _, errRead := conn.ReadMessage(); errRead != nil {
-					t.Error(errRead)
-					return
-				}
-				if tc.disconnect {
-					return
-				}
-				for _, event := range []string{`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_local","call_id":"call_local","name":"lookup","arguments":""}}`, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_local","delta":"{}"}`, completed} {
-					if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(event)); errWrite != nil {
-						t.Error(errWrite)
+				for turn := 1; ; turn++ {
+					if _, _, errRead := conn.ReadMessage(); errRead != nil {
+						if tc.name != "selected account" {
+							t.Error(errRead)
+						}
+						return
+					}
+					if tc.disconnect {
+						return
+					}
+					doc := ojson.NewDocString(completed)
+					doc.Set("response.id", fmt.Sprintf("resp_local_%d", turn))
+					completed = doc.String()
+					for _, event := range []string{`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_local","call_id":"call_local","name":"lookup","arguments":""}}`, `{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_local","delta":"{}"}`, completed} {
+						if errWrite := conn.WriteMessage(websocket.TextMessage, []byte(event)); errWrite != nil {
+							t.Error(errWrite)
+							return
+						}
+					}
+					if tc.name != "selected account" {
 						return
 					}
 				}
@@ -108,7 +119,9 @@ func TestCodexWSPolicyPluginHTTPIntegration(t *testing.T) {
 			}
 			manager := coreauth.NewManager(nil, &coreauth.RoundRobinSelector{}, nil)
 			manager.SetRetryConfig(2, 0, 0)
-			manager.RegisterExecutor(runtimeexecutor.NewCodexAutoExecutor(cfg))
+			executor := runtimeexecutor.NewCodexAutoExecutor(cfg)
+			defer executor.CloseExecutionSession(coreauth.CloseAllExecutionSessionsID)
+			manager.RegisterExecutor(executor)
 			const authID = "selected.json"
 			registry.GetGlobalRegistry().RegisterClient(authID, "codex", []*registry.ModelInfo{{ID: "gpt-6-astra"}})
 			t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(authID) })
@@ -130,6 +143,19 @@ func TestCodexWSPolicyPluginHTTPIntegration(t *testing.T) {
 				t.Fatalf("HTTP calls=%d want=%d body=%s", got, tc.wantHTTP, recorder.Body.String())
 			}
 			if tc.name == "selected account" {
+				for turn := 2; turn <= 10; turn++ {
+					repeat := httptest.NewRecorder()
+					next, _ := gin.CreateTestContext(repeat)
+					next.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-astra","stream":true,"input":[{"role":"user","content":"hello"},{"role":"assistant","content":"prior reply"},{"role":"user","content":"next question"}]}`))
+					next.Request.Header.Set("Content-Type", "application/json")
+					openaihandlers.NewOpenAIResponsesAPIHandler(base).Responses(next)
+					if repeat.Code != http.StatusOK || !strings.Contains(repeat.Body.String(), fmt.Sprintf("resp_local_%d", turn)) {
+						t.Fatalf("pooled turn %d: %d %s", turn, repeat.Code, repeat.Body.String())
+					}
+				}
+				if wsCount.Load() != 1 || httpCount.Load() != 0 {
+					t.Fatalf("ten plugin requests: WS handshakes=%d HTTP=%d", wsCount.Load(), httpCount.Load())
+				}
 				nextCfg, errNext := config.ParseConfigBytes([]byte(fmt.Sprintf("plugins:\n  enabled: true\n  dir: %q\n  configs:\n    codex-ws-bridge:\n      enabled: true\n      mode: http\n      auth_ids: [selected.json]\n", dir)))
 				if errNext != nil {
 					t.Fatal(errNext)

@@ -132,6 +132,7 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 		MultiAuthProviders:              pluginabi.SchemaVersion >= pluginabi.SchemaVersionMultiAuthProviders,
 		CredentialScopeErrors:           true,
 		RequestScopeErrors:              true,
+		CodexAlphaSearchPayloadVersion:  1,
 	})
 	if errCall != nil {
 		return pluginapi.Plugin{}, errCall

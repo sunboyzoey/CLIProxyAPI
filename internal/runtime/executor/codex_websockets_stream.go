@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -103,8 +104,26 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		executionSessionID = ""
 	}
 	var sess *codexWebsocketSession
+	var poolLease *helps.HTTPWebsocketLease[*codexWebsocketSession]
+	poolLeaseTransferred := false
+	defer func() {
+		if poolLease != nil && !poolLeaseTransferred {
+			poolLease.Release(false)
+		}
+	}()
 	isEphemeralSession := false
-	if executionSessionID != "" {
+	if httpBridge {
+		poolLease, err = e.acquireHTTPWebsocketSession(ctx, auth, wsURL, wsHeaders, opts)
+		if err != nil {
+			return nil, err
+		}
+		sess = poolLease.Resource()
+		// Keep the existing non-replay branch for HTTP bridge send failures.
+		isEphemeralSession = true
+		sess.connMu.Lock()
+		wsHeaders = sess.handshakeHeaders.Clone()
+		sess.connMu.Unlock()
+	} else if executionSessionID != "" {
 		sess = e.getOrCreateSession(executionSessionID)
 		if sess != nil {
 			sess.reqMu.Lock()
@@ -170,6 +189,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		upstreamHeaders = respHS.Header.Clone()
 	}
 	if errDial != nil {
+		if httpBridge && (errors.Is(errDial, context.Canceled) || errors.Is(errDial, context.DeadlineExceeded)) {
+			unlockStreamSession()
+			return nil, errDial
+		}
 		if cliproxyexecutor.IsUpstreamWebsocketTurnError(errDial) {
 			unlockStreamSession()
 			return nil, codexWebsocketTurnEventID(errDial, originalPayload)
@@ -194,7 +217,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 		if respHS != nil && respHS.StatusCode > 0 {
 			unlockStreamSession()
-			return nil, newCodexStatusErrWithHeadersAndCooling(respHS.StatusCode, respHS.Header, bodyErr, e.modelLevelCooling())
+			return nil, newCodexWebsocketHandshakeStatusErr(respHS, bodyErr, e.modelLevelCooling())
 		}
 		unlockStreamSession()
 		return nil, errDial
@@ -262,9 +285,12 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			// Retry once with a new websocket connection for the same execution session.
 			connRetry, closerRetry, respHSRetry, errDialRetry := e.ensureUpstreamConnWithSIWC(ctx, auth, sess, authID, wsURL, wsHeaders, useSIWC)
 			if errDialRetry != nil || connRetry == nil {
-				_ = recordWebsocketDialRetryFailure(ctx, e.cfg, wsReqLog, respHSRetry, errDialRetry)
+				bodyErr := recordWebsocketDialRetryFailure(ctx, e.cfg, wsReqLog, respHSRetry, errDialRetry)
 				sess.clearActive(conn, readCh)
 				sess.reqMu.Unlock()
+				if respHSRetry != nil && respHSRetry.StatusCode > 0 {
+					return nil, newCodexWebsocketHandshakeStatusErr(respHSRetry, bodyErr, e.modelLevelCooling())
+				}
 				return nil, errDialRetry
 			}
 			previousConn, previousReadCh := conn, readCh
@@ -639,7 +665,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		if sess != nil {
 			sess.clearActive(conn, readCh)
 			unlockStreamSession()
-			if isEphemeralSession {
+			if poolLease != nil {
+				finishHTTPWebsocketTurn(sess)
+				poolLease.Release(len(readCh) == 0)
+			} else if isEphemeralSession {
 				closeCodexWebsocketSession(sess, "completed")
 			}
 		} else {
@@ -653,6 +682,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	}
 
 	emittedPayload := len(bufferedChunks) > 0 || len(initialChunks) > 0
+	poolLeaseTransferred = true
 
 	go func() {
 		terminateReason := "completed"
@@ -663,7 +693,13 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			if sess != nil {
 				sess.clearActive(conn, readCh)
 				unlockStreamSession()
-				if isEphemeralSession {
+				if poolLease != nil {
+					reusable := terminateReason == "completed" && terminateErr == nil && ctx.Err() == nil && len(readCh) == 0
+					if reusable {
+						finishHTTPWebsocketTurn(sess)
+					}
+					poolLease.Release(reusable)
+				} else if isEphemeralSession {
 					closeCodexWebsocketSession(sess, terminateReason)
 				}
 				return
