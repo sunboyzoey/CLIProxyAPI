@@ -1,10 +1,13 @@
 package cliproxy
 
 import (
+	"context"
 	"maps"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
@@ -53,6 +56,10 @@ func SetGlobalModelRegistryHook(hook ModelRegistryHook) {
 // registry lock. Obsolete inherited exclusions must not advance the registry epoch
 // and invalidate newer work, even if the credential attributes are unchanged.
 type modelRegistrationFence struct {
+	nativeCodex               bool
+	codexDirectory            bool
+	codexCheckedAt            time.Time
+	codexCredentialVersion    uint64
 	globalExclusions          map[string]diff.ExcludedModelsSummary
 	exclusionProvider         string
 	fallbackExclusionProvider string
@@ -80,16 +87,20 @@ func newModelRegistrationFence(a *coreauth.Auth, cfg *config.Config) modelRegist
 	if _, _, compat := openAICompatInfoFromAuth(a); compat {
 		provider = "openai-compatibility"
 	}
+	nativeCodex := provider == "codex" && a.OAuthAccountGroup() != ""
 	return modelRegistrationFence{
-		globalExclusions:  exclusions,
-		exclusionProvider: provider,
-		registryEpoch:     GlobalModelRegistry().ClientRegistrationEpoch(a.ID),
-		registrationEpoch: a.RegistrationEpoch,
-		prefix:            a.Prefix,
-		provider:          a.Provider,
-		disabled:          a.Disabled || a.Status == coreauth.StatusDisabled,
-		authKind:          a.AuthKind(),
-		attributes:        maps.Clone(a.Attributes),
+		codexCredentialVersion: a.CredentialVersion,
+		nativeCodex:            nativeCodex,
+		codexDirectory:         nativeCodex && usesCodexAccountCatalog(cfg),
+		globalExclusions:       exclusions,
+		exclusionProvider:      provider,
+		registryEpoch:          GlobalModelRegistry().ClientRegistrationEpoch(a.ID),
+		registrationEpoch:      a.RegistrationEpoch,
+		prefix:                 a.Prefix,
+		provider:               a.Provider,
+		disabled:               a.Disabled || a.Status == coreauth.StatusDisabled,
+		authKind:               a.AuthKind(),
+		attributes:             maps.Clone(a.Attributes),
 	}
 }
 
@@ -101,6 +112,7 @@ func (f modelRegistrationFence) withAuth(a *coreauth.Auth) modelRegistrationFenc
 		return f
 	}
 	next := newModelRegistrationFence(a, nil)
+	next.codexDirectory = next.nativeCodex && f.codexDirectory
 	next.globalExclusions = f.globalExclusions
 	next.fallbackExclusionProvider = f.fallbackExclusionProvider
 	next.registryEpoch = f.registryEpoch
@@ -120,10 +132,28 @@ func (f modelRegistrationFence) publishUnregister(s *Service, authID string) boo
 }
 
 func (f modelRegistrationFence) publishIfCurrent(s *Service, authID string, publish func() bool) bool {
-	publishWithConfig := func() bool {
-		if s != nil && !f.disabled && f.authKind != coreauth.AuthKindAPIKey && strings.TrimSpace(f.attributes["excluded_models"]) == "" {
+	publishWithConfig := func(current *coreauth.Auth) bool {
+		checkExclusions := !f.disabled && f.authKind != coreauth.AuthKindAPIKey && strings.TrimSpace(f.attributes["excluded_models"]) == ""
+		if s != nil && (checkExclusions || f.nativeCodex) {
 			s.cfgMu.RLock()
 			defer s.cfgMu.RUnlock()
+			if f.nativeCodex {
+				if f.codexDirectory != usesCodexAccountCatalog(s.cfg) {
+					return false
+				}
+				if f.codexDirectory && !f.disabled && current != nil {
+					if current.CredentialVersion != f.codexCredentialVersion {
+						return false
+					}
+					tiers, ok := helps.CachedCodexAccountTiersForConfig(s.cfg, current)
+					if !f.codexCheckedAt.Equal(tiers.CheckedAt) || (ok && f.codexCheckedAt.IsZero()) {
+						return false
+					}
+				}
+			}
+			if !checkExclusions {
+				return publish()
+			}
 			// Match the watcher's normalization so no-op and unrelated reloads do not
 			// discard work. A real change always schedules a replacement: the watcher
 			// redispatches affected auths, and applyConfigRuntime re-registers every
@@ -142,7 +172,11 @@ func (f modelRegistrationFence) publishIfCurrent(s *Service, authID string, publ
 		return publish()
 	}
 	if s == nil || s.coreManager == nil {
-		return publishWithConfig()
+		return publishWithConfig(nil)
 	}
-	return s.coreManager.PublishIfRegistrationCurrent(authID, f.registrationEpoch, f.prefix, f.provider, f.disabled, f.authKind, f.attributes, publishWithConfig)
+	if f.codexDirectory {
+		// The same file can receive a different account without changing its registration epoch.
+		return s.coreManager.PublishIfRegistrationCurrentContext(context.Background(), authID, f.registrationEpoch, f.prefix, f.provider, f.disabled, f.authKind, f.attributes, publishWithConfig)
+	}
+	return s.coreManager.PublishIfRegistrationCurrent(authID, f.registrationEpoch, f.prefix, f.provider, f.disabled, f.authKind, f.attributes, func() bool { return publishWithConfig(nil) })
 }

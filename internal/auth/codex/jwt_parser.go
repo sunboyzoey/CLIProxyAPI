@@ -57,6 +57,21 @@ type CodexAuthInfo struct {
 // contents to retrieve user information from an ID token after it has been validated
 // by the authentication server.
 func ParseJWTToken(token string) (*JWTClaims, error) {
+	claimsData, err := DecodeJWTPayload(token)
+	if err != nil {
+		return nil, err
+	}
+
+	var claims JWTClaims
+	if err = json.Unmarshal(claimsData, &claims); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JWT claims: %w", err)
+	}
+
+	return &claims, nil
+}
+
+// DecodeJWTPayload reads the claim bytes for local introspection without verifying the signature.
+func DecodeJWTPayload(token string) ([]byte, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid JWT token format: expected 3 parts, got %d", len(parts))
@@ -67,13 +82,7 @@ func ParseJWTToken(token string) (*JWTClaims, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode JWT claims: %w", err)
 	}
-
-	var claims JWTClaims
-	if err = json.Unmarshal(claimsData, &claims); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JWT claims: %w", err)
-	}
-
-	return &claims, nil
+	return claimsData, nil
 }
 
 // base64URLDecode decodes a Base64 URL-encoded string, adding padding if necessary.

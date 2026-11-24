@@ -91,6 +91,7 @@ func BuildOpenAIResponsesStreamFailedChunk(status int, errText string, sequenceN
 }
 
 func populateOpenAIResponsesStreamErrorChunkDoc(doc *ojson.Doc, errorPath string, status int, errText string, sequenceNumber int) {
+	errText = SanitizeBPSPublicError(status, errText)
 	if status <= 0 {
 		status = http.StatusInternalServerError
 	}

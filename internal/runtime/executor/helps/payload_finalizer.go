@@ -53,16 +53,21 @@ func NewPayloadFinalizer(cfg *config.Config, executor, model, protocol, root str
 	if len(auths) > 0 {
 		auth = auths[0]
 	}
-	return newPayloadFinalizer(cfg, executor, model, protocol, root, original, req, opts, auth, nil)
+	return newPayloadFinalizer(cfg, executor, model, protocol, root, original, req, opts, auth, nil, codexTierRule{})
+}
+
+// NewCodexPayloadFinalizer snapshots the selected native OAuth account's tier policy.
+func NewCodexPayloadFinalizer(ctx context.Context, cfg *config.Config, executor, model, protocol, root string, original []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, auth *cliproxyauth.Auth) PayloadFinalizer {
+	return newPayloadFinalizer(cfg, executor, model, protocol, root, original, req, opts, auth, nil, accountTierRule(ctx, cfg, auth))
 }
 
 // NewPayloadFinalizerWithSourceModels includes intermediate resolved model IDs
 // when a provider makes a second model selection after alias resolution.
 func NewPayloadFinalizerWithSourceModels(cfg *config.Config, executor, model, protocol, root string, original []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, sourceModels ...string) PayloadFinalizer {
-	return newPayloadFinalizer(cfg, executor, model, protocol, root, original, req, opts, nil, append([]string(nil), sourceModels...))
+	return newPayloadFinalizer(cfg, executor, model, protocol, root, original, req, opts, nil, append([]string(nil), sourceModels...), codexTierRule{})
 }
 
-func newPayloadFinalizer(cfg *config.Config, executor, model, protocol, root string, original []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, auth *cliproxyauth.Auth, sourceModels []string) PayloadFinalizer {
+func newPayloadFinalizer(cfg *config.Config, executor, model, protocol, root string, original []byte, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, auth *cliproxyauth.Auth, sourceModels []string, tier codexTierRule) PayloadFinalizer {
 	requestedModel := PayloadRequestedModel(opts, req.Model)
 	requestPath := PayloadRequestPath(opts)
 	headers := opts.Headers.Clone()
@@ -71,12 +76,13 @@ func newPayloadFinalizer(cfg *config.Config, executor, model, protocol, root str
 	if opts.Metadata != nil {
 		formatCallback, _ = opts.Metadata[cliproxyexecutor.FinalizedResponseFormatCallbackMetadataKey].(func(string))
 	}
+	tier.captureClientTier(req.Payload, opts.OriginalRequest)
 	fn := PayloadFinalizer(func(body []byte) []byte {
 		if len(body) == 0 && cap(body) == 1 {
 			key := &body[:1][0]
 			if v, ok := payloadDocProbes.LoadAndDelete(key); ok {
 				if doc, okDoc := v.(*ojson.Doc); okDoc && doc != nil {
-					applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, executor, model, protocol, opts.SourceFormat.String(), root, doc, source, requestedModel, requestPath, headers, auth, sourceModels)
+					applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, executor, model, protocol, opts.SourceFormat.String(), root, doc, source, requestedModel, requestPath, headers, auth, sourceModels, tier)
 					if formatCallback != nil {
 						formatCallback(strings.Clone(strings.TrimSpace(doc.Get(buildPayloadPath(root, "response_format")).String())))
 					}
@@ -85,7 +91,7 @@ func newPayloadFinalizer(cfg *config.Config, executor, model, protocol, root str
 			}
 		}
 		doc := ojson.NewDoc(body)
-		_, mutated := applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, executor, model, protocol, opts.SourceFormat.String(), root, doc, source, requestedModel, requestPath, headers, auth, sourceModels)
+		_, mutated := applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, executor, model, protocol, opts.SourceFormat.String(), root, doc, source, requestedModel, requestPath, headers, auth, sourceModels, tier)
 		out := body
 		if mutated {
 			out = doc.Bytes()

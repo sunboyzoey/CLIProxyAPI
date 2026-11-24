@@ -227,6 +227,14 @@ type Error struct {
 	// for correctness. The same pair is accepted as error_detail on host.stream.emit
 	// and host.stream.close.
 	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
+	// CredentialScope marks a quota failure shared by all models of this credential.
+	// Hosts advertise support through credential_scope_errors in lifecycle requests.
+	// Plugins requiring account-wide cooling must check that feature before use.
+	CredentialScope bool `json:"credential_scope,omitempty"`
+	// RequestScope identifies local admission/request failures that must neither
+	// cool credentials/models nor retry on another authorization. Hosts advertise
+	// support through request_scope_errors in lifecycle requests.
+	RequestScope bool `json:"request_scope,omitempty"`
 	// CredentialScoped reports whether the failure applies to the whole credential
 	// across all models (for example, an account-wide 429 quota or spend limit)
 	// rather than only the requested model.
@@ -262,7 +270,7 @@ func (e *Error) IsCredentialScoped() bool {
 	if e == nil {
 		return false
 	}
-	return e.CredentialScoped || strings.EqualFold(strings.TrimSpace(e.Code), ErrorCodeCredentialQuota)
+	return e.CredentialScope || e.CredentialScoped || strings.EqualFold(strings.TrimSpace(e.Code), ErrorCodeCredentialQuota)
 }
 
 // IsRequestScoped reports whether the Error is tied to the request rather than the credential.
@@ -270,7 +278,7 @@ func (e *Error) IsRequestScoped() bool {
 	if e == nil || e.IsCredentialScoped() {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(e.Code), ErrorCodeRequestScoped)
+	return e.RequestScope || strings.EqualFold(strings.TrimSpace(e.Code), ErrorCodeRequestScoped)
 }
 
 // IsTransientRateLimit reports whether the Error is a transient per-model capacity 429.

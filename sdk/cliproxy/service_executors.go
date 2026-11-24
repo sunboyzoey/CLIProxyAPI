@@ -763,7 +763,7 @@ func (s *Service) tryRegisterPluginModelsForAuthWithConfigFenced(ctx context.Con
 	publicationFence.fallbackExclusionProvider = fallbackExclusionProvider
 	if len(models) > 0 {
 		models = applyOAuthSettingsForAuth(cfg, providerKey, activeAuthKind, models)
-		return true, s.registerResolvedModelsForAuthFenced(activeAuth, publicationFence, providerKey, applyModelPrefixes(models, activeAuth.Prefix, cfg != nil && cfg.ForceModelPrefix))
+		return true, s.registerResolvedModelsForAuthFenced(activeAuth, publicationFence, providerKey, applyAuthModelPrefixes(models, activeAuth, cfg != nil && cfg.ForceModelPrefix))
 	}
 	return true, s.unregisterModelsForAuthFenced(activeAuth, publicationFence)
 }

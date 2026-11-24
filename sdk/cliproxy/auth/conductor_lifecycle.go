@@ -760,6 +760,10 @@ func (m *Manager) updateInternalLockedWithOptions(ctx context.Context, base, aut
 			m.mu.Unlock()
 			return nil, false, baseSuperseded, false, fmt.Errorf("persist meta auth: %w", errPersist)
 		}
+		if requireAuthPersist(ctx) {
+			m.mu.Unlock()
+			return nil, false, baseSuperseded, false, fmt.Errorf("persist auth: %w", errPersist)
+		}
 		// Ordinary persistence failures remain non-fatal, but never silent.
 		log.WithFields(log.Fields{"auth_id": auth.ID, "credential": auth.ID, "provider": auth.Provider}).Warnf("failed to persist updated auth %s (%s): %v", auth.Provider, auth.ID, errPersist)
 	}

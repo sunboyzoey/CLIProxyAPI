@@ -10,6 +10,7 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -362,5 +363,27 @@ func closeHTTPResponseBody(resp *http.Response, logPrefix string) {
 	}
 	if errClose := resp.Body.Close(); errClose != nil {
 		log.Errorf("%s: %v", logPrefix, errClose)
+	}
+}
+
+// newCodexWebsocketHandshakeStatusErr preserves explicit provider refusals. Only
+// a confirmed empty 403 without challenge/quota signals gets a distinct code;
+// an unread body or a normal business-response 403 must not enter this path.
+func newCodexWebsocketHandshakeStatusErr(resp *http.Response, body []byte, modelLevelCooling bool) statusErr {
+	if resp.StatusCode != http.StatusForbidden || resp.ContentLength != 0 || len(body) != 0 ||
+		strings.EqualFold(strings.TrimSpace(resp.Header.Get("Cf-Mitigated")), "challenge") ||
+		strings.EqualFold(strings.TrimSpace(resp.Header.Get("X-Codex-Limit-Reached")), "true") ||
+		strings.EqualFold(strings.TrimSpace(resp.Header.Get("X-Codex-Allowed")), "false") {
+		return newCodexStatusErrWithHeadersAndCooling(resp.StatusCode, resp.Header, body, modelLevelCooling)
+	}
+	doc := ojson.NewDoc([]byte("{}"))
+	doc.Set("error.type", "permission_error")
+	doc.Set("error.code", cliproxyauth.ErrorCodeWebsocketHandshakeRejected)
+	doc.Set("error.message", "Upstream rejected the WebSocket handshake (HTTP 403) without an explanation.")
+	return statusErr{
+		code:                       resp.StatusCode,
+		msg:                        doc.String(),
+		retryAfter:                 parseRetryAfterHeader(resp.Header, time.Now()),
+		websocketHandshakeRejected: true,
 	}
 }

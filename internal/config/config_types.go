@@ -327,6 +327,10 @@ func (c ResponseCompressionConfig) EffectiveMinBytes() int {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
+	// HTTPWebsocketPoolMaxPerAccount bounds simultaneous HTTP-to-WS connections.
+	// Zero uses eight. Established requests have no additional pool timeout.
+	HTTPWebsocketPoolMaxPerAccount int `yaml:"http-websocket-pool-max-per-account,omitempty" json:"http-websocket-pool-max-per-account,omitempty"`
+
 	// WebsocketCompression controls upstream and downstream permessage-deflate; unset means enabled.
 	WebsocketCompression *bool `yaml:"websocket-compression,omitempty" json:"websocket-compression,omitempty"`
 	// UpstreamRequestCompression enables zstd request bodies for the ChatGPT Codex backend.

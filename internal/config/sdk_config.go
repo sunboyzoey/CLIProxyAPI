@@ -99,6 +99,12 @@ type SDKConfig struct {
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
+	// OAuthKeyGroups binds SHA-256 fingerprints of downstream keys to native Codex account groups.
+	OAuthKeyGroups map[string]string `yaml:"oauth-key-groups,omitempty" json:"oauth-key-groups,omitempty"`
+
+	// OAuthKeySelection scopes native Codex accounts to a selected downstream key.
+	OAuthKeySelection bool `yaml:"oauth-key-selection,omitempty" json:"oauth-key-selection,omitempty"`
+
 	// PassthroughHeaders controls whether upstream response headers are forwarded to downstream clients.
 	// Default is false (disabled).
 	PassthroughHeaders bool `yaml:"passthrough-headers" json:"passthrough-headers"`

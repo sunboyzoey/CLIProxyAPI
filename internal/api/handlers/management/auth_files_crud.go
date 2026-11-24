@@ -845,6 +845,13 @@ func (h *Handler) buildAuthsFromFileDataV8(path string, data []byte) ([]*coreaut
 		return nil, nil, fmt.Errorf("%w: %w", errInvalidAuthFile, errParseMeta)
 	}
 	coreauth.NormalizeCredentialMetadata(metadata)
+	if metadata["type"] == "codex" {
+		for _, key := range []string{"oauth_group", "service_tier"} {
+			if err := coreauth.ValidateCodexAccountField(key, metadata[key]); err != nil {
+				return nil, nil, fmt.Errorf("%w: %w", errInvalidAuthFile, err)
+			}
+		}
+	}
 	if errWeight := coreauth.ValidateAuthWeight(&coreauth.Auth{Metadata: metadata}); errWeight != nil {
 		return nil, nil, fmt.Errorf("%w: %w", errInvalidAuthFile, errWeight)
 	}

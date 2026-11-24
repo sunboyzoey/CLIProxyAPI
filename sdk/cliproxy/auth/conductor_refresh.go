@@ -1557,7 +1557,7 @@ func (m *Manager) refreshAuthForRequestAtVersion(ctx context.Context, id, failed
 	if id == "" {
 		return nil, errors.New("auth id is empty")
 	}
-	if credentialVersion == 0 && failedAccessToken != "" {
+	if credentialVersion == 0 && failedAccessToken != "" && !isNativeProbeRefresh(ctx) {
 		m.markRejectedAccessToken(id, failedAccessToken)
 	}
 
@@ -1566,6 +1566,9 @@ func (m *Manager) refreshAuthForRequestAtVersion(ctx context.Context, id, failed
 		return nil, errLock
 	}
 	defer releaseRefresh()
+	if isNativeProbeRefresh(ctx) && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 
 	m.mu.RLock()
 	auth := m.auths[id].Clone()
@@ -1608,7 +1611,7 @@ func (m *Manager) refreshAuthForRequestAtVersion(ctx context.Context, id, failed
 	if credentialVersion != 0 && auth.CredentialVersion != credentialVersion {
 		return nil, errVerifyCredentialSuperseded
 	}
-	if credentialVersion != 0 && failedAccessToken != "" {
+	if credentialVersion != 0 && failedAccessToken != "" && !isNativeProbeRefresh(ctx) {
 		m.markRejectedAccessToken(id, failedAccessToken)
 	}
 	if hasDisabledInvalidGrantFailure(auth) && !forceRefresh {

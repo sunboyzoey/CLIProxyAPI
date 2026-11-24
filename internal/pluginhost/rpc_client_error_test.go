@@ -368,7 +368,7 @@ func TestStreamCallbacksCarryStructuredPluginErrors(t *testing.T) {
 	type statusError interface{ StatusCode() int }
 	type retryAfterError interface{ RetryAfter() *time.Duration }
 
-	detail := `{"code":"rate_limited","message":"slow down","http_status":429,"retry_after_seconds":7}`
+	detail := `{"code":"rate_limited","message":"slow down","http_status":429,"retry_after_seconds":7,"credential_scope":true}`
 	for _, tc := range []struct {
 		name string
 		send func(host *Host, streamID string) error
@@ -392,6 +392,10 @@ func TestStreamCallbacksCarryStructuredPluginErrors(t *testing.T) {
 			chunk := <-chunks
 			if chunk.Err == nil {
 				t.Fatal("stream error was dropped")
+			}
+			scoped, ok := chunk.Err.(interface{ IsCredentialScoped() bool })
+			if !ok || !scoped.IsCredentialScoped() {
+				t.Fatal("stream lost credential quota scope")
 			}
 			var withStatus statusError
 			if !errors.As(chunk.Err, &withStatus) || withStatus.StatusCode() != 429 {

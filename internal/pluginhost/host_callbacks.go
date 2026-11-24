@@ -2,12 +2,16 @@ package pluginhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 
 	"github.com/MoeForge/moego/json"
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -52,9 +56,10 @@ type rpcHostHTTPStreamReadRequest struct {
 }
 
 type rpcHostHTTPStreamReadResponse struct {
-	Payload []byte `json:"payload,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Done    bool   `json:"done,omitempty"`
+	Payload   []byte `json:"payload,omitempty"`
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Done      bool   `json:"done,omitempty"`
 }
 
 type rpcHostHTTPStreamCloseRequest struct {
@@ -145,6 +150,8 @@ func (h *Host) callFromPlugin(ctx context.Context, method string, request []byte
 		return nil, fmt.Errorf("host plugin callback instance is closed")
 	}
 	switch method {
+	case "host.auth.bps_disable":
+		return h.callHostBPSDisable(ctx, request)
 	case pluginabi.MethodHostModelExecute:
 		return h.callHostModelExecute(ctx, request)
 	case pluginabi.MethodHostModelExecuteStream:
@@ -177,6 +184,20 @@ func (h *Host) callFromPlugin(ctx context.Context, method string, request []byte
 		return h.callHostAuthGet(ctx, request)
 	case pluginabi.MethodHostAuthGetRuntime:
 		return h.callHostAuthGetRuntime(ctx, request)
+	case "host.auth.probe_credentials":
+		return h.callHostNativeProbeCredentials(ctx, request)
+	case "host.auth.native_concurrency_get":
+		return h.callHostNativeConcurrency(ctx, request, false)
+	case "host.auth.native_concurrency_set":
+		return h.callHostNativeConcurrency(ctx, request, true)
+	case "host.auth.native_concurrency_list":
+		return h.callHostNativeConcurrencyList(ctx, request)
+	case "host.auth.native_inventory":
+		return h.nativeOAuthInventory()
+	case "host.auth.native_quota":
+		return h.nativeAccountQuota(ctx, request)
+	case "host.auth.bps_probe_credentials":
+		return h.callHostBPSProbeCredentials(ctx, request)
 	case pluginabi.MethodHostAuthSave:
 		return h.callHostAuthSave(ctx, request)
 	case pluginabi.MethodHostAuthModels:
@@ -207,7 +228,11 @@ func (h *Host) callHostHTTPDo(ctx context.Context, request []byte) ([]byte, erro
 		return nil, errAcquire
 	}
 	defer operation.finish()
-	resp, errDo := h.newHTTPClientWithProxy(nil, oauthProxyURLFromContext(operation.ctx)).Do(operation.ctx, httpReq)
+	client, errClient := h.httpClientForCallback(operation.ctx, request, httpReq)
+	if errClient != nil {
+		return nil, errClient
+	}
+	resp, errDo := client.Do(operation.ctx, httpReq)
 	if errDo != nil {
 		return nil, errDo
 	}
@@ -240,7 +265,11 @@ func (h *Host) callHostHTTPDoStream(ctx context.Context, request []byte) ([]byte
 		operation.finish()
 	}()
 
-	resp, errDo := h.newHTTPClientWithProxy(nil, oauthProxyURLFromContext(streamCtx)).DoStream(streamCtx, httpReq)
+	client, errClient := h.httpClientForCallback(streamCtx, request, httpReq)
+	if errClient != nil {
+		return nil, errClient
+	}
+	resp, errDo := client.DoStream(streamCtx, httpReq)
 	if errDo != nil {
 		return nil, errDo
 	}
@@ -268,6 +297,31 @@ func (h *Host) callHostHTTPDoStream(ctx context.Context, request []byte) ([]byte
 	}
 	keepStream = true
 	return rawResp, nil
+}
+
+// Local plugin gateways must not inherit the upstream account's transport.
+// The opt-in is deliberately restricted to literal loopback HTTP destinations;
+// it is not a general proxy override and never changes the operation context.
+func (h *Host) httpClientForCallback(ctx context.Context, raw []byte, req pluginapi.HTTPRequest) (pluginapi.HostHTTPClient, error) {
+	if !ojson.ValidBytes(raw) {
+		return nil, fmt.Errorf("invalid host http transport options")
+	}
+	option := ojson.GetBytes(raw, "loopback_direct")
+	if option.Exists() && option.Type != ojson.True && option.Type != ojson.False {
+		return nil, fmt.Errorf("loopback_direct must be a boolean")
+	}
+	if option.Type != ojson.True {
+		return h.newHTTPClientWithProxy(nil, oauthProxyURLFromContext(ctx)), nil
+	}
+	u, err := url.Parse(req.URL)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Opaque != "" {
+		return nil, fmt.Errorf("loopback_direct requires a literal loopback HTTP URL")
+	}
+	ip := net.ParseIP(u.Hostname())
+	if ip == nil || !ip.IsLoopback() {
+		return nil, fmt.Errorf("loopback_direct requires a literal loopback HTTP URL")
+	}
+	return &hostHTTPClient{host: h, loopbackDirect: true}, nil
 }
 
 func (h *Host) callHostHTTPOperationOpen(ctx context.Context, request []byte) ([]byte, error) {
@@ -312,6 +366,9 @@ func (h *Host) callHostHTTPStreamRead(ctx context.Context, request []byte) ([]by
 	}
 	chunk, done, errRead := h.httpStreams.read(ctx, hostCallbackPluginIDFromContext(ctx), hostCallbackInstanceFromContext(ctx), req.StreamID)
 	if errRead != nil {
+		if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
+			return marshalRPCResult(rpcHostHTTPStreamReadResponse{Error: errRead.Error(), ErrorCode: httpStreamErrorCode(errRead), Done: true})
+		}
 		return nil, errRead
 	}
 	resp := rpcHostHTTPStreamReadResponse{
@@ -320,9 +377,26 @@ func (h *Host) callHostHTTPStreamRead(ctx context.Context, request []byte) ([]by
 	}
 	if chunk.Err != nil {
 		resp.Error = chunk.Err.Error()
+		resp.ErrorCode = httpStreamErrorCode(chunk.Err)
 		resp.Done = true
 	}
 	return marshalRPCResult(resp)
+}
+
+// Preserve typed transport causes without parsing or exporting arbitrary messages.
+func httpStreamErrorCode(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context_deadline_exceeded"
+	default:
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			return "transport_timeout"
+		}
+		return "transport_read_failed"
+	}
 }
 
 func (h *Host) callHostHTTPStreamClose(ctx context.Context, request []byte) ([]byte, error) {

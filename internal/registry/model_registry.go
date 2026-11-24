@@ -38,6 +38,8 @@ type NativeCapabilities struct {
 
 // ModelInfo represents information about an available model
 type ModelInfo struct {
+	// OptionalOAuthPrefix marks a generated native OAuth route kept for direct requests.
+	OptionalOAuthPrefix bool `json:"-"`
 	// ID is the unique identifier for the model
 	ID string `json:"id"`
 	// SourceModelID identifies the provider model behind this published route.
@@ -2291,4 +2293,30 @@ func (r *ModelRegistry) ClientRegistrationEpoch(clientID string) uint64 {
 func (r *ModelRegistry) GetModelsForClient(clientID string) []*ModelInfo {
 	models, _ := r.GetModelsAndEpochForClient(clientID)
 	return models
+}
+
+// DirectoryModelRoute describes a published name within the selected catalog scope.
+type DirectoryModelRoute struct {
+	Allowed bool
+	Listed  bool
+}
+
+// DirectoryModelRoutes aggregates registrations by public ID. Explicit publications win
+// over generated aliases. Unscoped IDs are also recorded so a protocol-encoded ID cannot
+// be decoded as an authorized model if it exactly names a different out-of-scope route.
+func (r *ModelRegistry) DirectoryModelRoutes(clients map[string]bool) map[string]DirectoryModelRoute {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	routes := make(map[string]DirectoryModelRoute)
+	for clientID, infos := range r.clientModelInfos {
+		for id, info := range infos {
+			route := routes[id]
+			if info != nil && (clients == nil || clients[clientID]) {
+				route.Allowed = true
+				route.Listed = route.Listed || !info.OptionalOAuthPrefix
+			}
+			routes[id] = route
+		}
+	}
+	return routes
 }

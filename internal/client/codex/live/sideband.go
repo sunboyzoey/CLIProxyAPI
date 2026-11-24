@@ -70,10 +70,12 @@ type storedSession struct {
 }
 
 type sessionStore struct {
-	mu       sync.Mutex
-	next     uint64
-	lifetime time.Duration
-	sessions map[string]*storedSession
+	mu              sync.Mutex
+	next            uint64
+	lifetime        time.Duration
+	sessions        map[string]*storedSession
+	closed          bool
+	activeResources map[*liveSessionResources]struct{}
 }
 
 type sessionClaim int
@@ -101,6 +103,11 @@ func (s *sessionStore) put(callID string, session liveSession) liveSession {
 		session.resources = &liveSessionResources{}
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		endLiveSession(session, "server_stopped")
+		return liveSession{}
+	}
 	s.next++
 	session.callID = callID
 	session.token = s.next
@@ -193,6 +200,12 @@ func (s *sessionStore) closeAll(reason string) {
 		return
 	}
 	s.mu.Lock()
+	s.closed = true
+	resources := make([]*liveSessionResources, 0, len(s.activeResources))
+	for resource := range s.activeResources {
+		resources = append(resources, resource)
+		delete(s.activeResources, resource)
+	}
 	entries := make([]*storedSession, 0, len(s.sessions))
 	for callID, entry := range s.sessions {
 		delete(s.sessions, callID)
@@ -204,6 +217,9 @@ func (s *sessionStore) closeAll(reason string) {
 	s.mu.Unlock()
 	for _, entry := range entries {
 		endLiveSession(entry.session, reason)
+	}
+	for _, resource := range resources {
+		resource.close()
 	}
 }
 

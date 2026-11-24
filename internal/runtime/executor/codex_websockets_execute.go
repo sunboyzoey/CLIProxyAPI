@@ -82,7 +82,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 
 	instructionsResult := ojson.GetBytesNoCopy(req.Payload, "instructions")
 	hasExplicitInstructions := instructionsResult.Exists() && strings.TrimSpace(instructionsResult.String()) != ""
-	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts, auth))
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewCodexPayloadFinalizer(ctx, e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts, auth))
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 	helps.SetBoolIfDifferentDoc(doc, "stream", true)
 	_ = doc.Delete("prompt_cache_retention")
@@ -137,7 +137,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	if executionSessionID != "" {
 		sess = e.getOrCreateSession(executionSessionID)
-		sess.reqMu.Lock()
+		if errLock := sess.reqMu.LockContext(ctx); errLock != nil {
+			return resp, errLock
+		}
 		sessionLocked = true
 		defer unlockSession()
 	} else {
@@ -222,7 +224,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 			cliproxyexecutor.MarkUpstreamAttempt(ctx)
 		}
 		if respHS != nil && respHS.StatusCode > 0 {
-			return resp, newCodexStatusErrWithHeadersAndCooling(respHS.StatusCode, respHS.Header, bodyErr, e.modelLevelCooling())
+			return resp, newCodexWebsocketHandshakeStatusErr(respHS, bodyErr, e.modelLevelCooling())
 		}
 		return resp, errDial
 	}
@@ -319,7 +321,10 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 					return resp, errSendRetry
 				}
 			} else {
-				_ = recordWebsocketDialRetryFailure(ctx, e.cfg, wsReqLog, respHSRetry, errDialRetry)
+				bodyErr := recordWebsocketDialRetryFailure(ctx, e.cfg, wsReqLog, respHSRetry, errDialRetry)
+				if respHSRetry != nil && respHSRetry.StatusCode > 0 {
+					return resp, newCodexWebsocketHandshakeStatusErr(respHSRetry, bodyErr, e.modelLevelCooling())
+				}
 				return resp, errDialRetry
 			}
 		} else {

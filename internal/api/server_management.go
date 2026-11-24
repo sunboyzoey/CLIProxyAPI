@@ -264,7 +264,7 @@ func (s *Server) pluginManagementNoRoute(c *gin.Context) {
 		s.pluginResourceNoRoute(c)
 		return
 	}
-	if path != "/v0/management" && !strings.HasPrefix(path, "/v0/management/") {
+	if path != "/v0/management" && !strings.HasPrefix(path, "/v0/management/") && !strings.HasPrefix(path, "/v8/management/plugins/") {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
@@ -279,7 +279,7 @@ func (s *Server) pluginManagementNoRoute(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
-	if s.mgmt.ServePluginAuthURL(c) {
+	if !strings.HasPrefix(path, "/v8/") && s.mgmt.ServePluginAuthURL(c) {
 		c.Abort()
 		return
 	}

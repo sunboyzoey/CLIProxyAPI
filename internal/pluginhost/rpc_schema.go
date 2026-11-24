@@ -8,9 +8,16 @@ import (
 )
 
 type rpcLifecycleRequest struct {
-	ConfigYAML         []byte `json:"config_yaml"`
-	SchemaVersion      uint32 `json:"schema_version"`
-	MultiAuthProviders bool   `json:"multi_auth_providers,omitempty"`
+	NativeOAuthManagement bool `json:"native_oauth_management,omitempty"`
+	// Version 1 finalizes OAuth search models and applies payload rules last.
+	CodexAlphaSearchPayloadVersion uint32 `json:"codex_alpha_search_payload_version,omitempty"`
+	// Version 1 includes typed transport policy and native no-replay protection.
+	CodexHTTPWebsocketPolicyVersion uint32 `json:"codex_http_websocket_policy_version,omitempty"`
+	ConfigYAML                      []byte `json:"config_yaml"`
+	SchemaVersion                   uint32 `json:"schema_version"`
+	MultiAuthProviders              bool   `json:"multi_auth_providers,omitempty"`
+	CredentialScopeErrors           bool   `json:"credential_scope_errors,omitempty"`
+	RequestScopeErrors              bool   `json:"request_scope_errors,omitempty"`
 }
 
 type rpcRegistration struct {
@@ -29,6 +36,7 @@ type rpcCapabilities struct {
 	FrontendAuthOmitBody              bool                         `json:"frontend_auth_omit_body,omitempty"`
 	Scheduler                         bool                         `json:"scheduler"`
 	SchedulerAcrossPriorities         bool                         `json:"scheduler_across_priorities,omitempty"`
+	SchedulerLookupCandidates         bool                         `json:"scheduler_lookup_candidates,omitempty"`
 	SchedulerContinuity               bool                         `json:"scheduler_continuity,omitempty"`
 	ModelRouter                       bool                         `json:"model_router"`
 	Executor                          bool                         `json:"executor"`
@@ -226,6 +234,19 @@ func schedulerWantsAcrossPriorities(caps pluginapi.Capabilities) bool {
 	return false
 }
 
+func schedulerWantsLookupCandidates(caps pluginapi.Capabilities) bool {
+	if caps.Scheduler == nil {
+		return false
+	}
+	if caps.SchedulerLookupCandidates {
+		return true
+	}
+	if opt, ok := caps.Scheduler.(interface{ SchedulerWantsLookupCandidates() bool }); ok && opt != nil {
+		return opt.SchedulerWantsLookupCandidates()
+	}
+	return false
+}
+
 func rpcCapabilitiesFromPlugin(plugin pluginapi.Plugin) rpcCapabilities {
 	caps := plugin.Capabilities
 	return rpcCapabilities{
@@ -238,6 +259,7 @@ func rpcCapabilitiesFromPlugin(plugin pluginapi.Plugin) rpcCapabilities {
 		FrontendAuthOmitBody:              frontendAuthProviderWantsOmitBody(caps),
 		Scheduler:                         caps.Scheduler != nil,
 		SchedulerAcrossPriorities:         schedulerWantsAcrossPriorities(caps),
+		SchedulerLookupCandidates:         schedulerWantsLookupCandidates(caps),
 		SchedulerContinuity:               caps.SchedulerContinuity != nil,
 		ModelRouter:                       caps.ModelRouter != nil,
 		Executor:                          caps.Executor != nil,

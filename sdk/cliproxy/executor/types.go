@@ -118,6 +118,9 @@ type RequestAfterAuthInterceptor func(context.Context, RequestAfterAuthIntercept
 
 // RequestAfterAuthInterceptRequest describes a selected-auth request before executor translation.
 type RequestAfterAuthInterceptRequest struct {
+	// Provider and AuthID identify the selected attempt without exposing credentials.
+	Provider string
+	AuthID   string
 	// SourceFormat is the original client protocol format.
 	SourceFormat sdktranslator.Format
 	// ToFormat is the selected upstream protocol format.
@@ -138,6 +141,9 @@ type RequestAfterAuthInterceptRequest struct {
 
 // RequestAfterAuthInterceptResponse returns selected-auth request modifications.
 type RequestAfterAuthInterceptResponse struct {
+	// UpstreamTransport selects a supported native transport: empty, http or websocket.
+	// It is an execution hint, never a payload field or forwarded header.
+	UpstreamTransport string
 	// Path optionally overrides the inbound request path in Options.Metadata[RequestPathMetadataKey].
 	Path string
 	// Headers replaces matching current request headers and preserves headers not mentioned here.
@@ -217,6 +223,9 @@ type WebSocketResponseObserver func(context.Context, WebSocketResponseEvent)
 
 // Options controls execution behavior for both streaming and non-streaming calls.
 type Options struct {
+	// UpstreamTransport is a trusted after-auth plugin transport hint. Native
+	// executors retain eligibility checks and never weaken replay protection.
+	UpstreamTransport string
 	// Stream toggles streaming mode.
 	Stream bool
 	// Alt carries optional alternate format hint (e.g. SSE JSON key).

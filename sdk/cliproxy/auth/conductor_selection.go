@@ -99,6 +99,7 @@ type requiredAuthKindContextKey struct{}
 type credentialPolicyContextKey struct{}
 
 type authSelectionEligibility struct {
+	oauthGroup       string
 	requiredKind     string
 	credentialPolicy string
 	disallowFreeAuth bool
@@ -123,6 +124,7 @@ func credentialPolicyFromContext(ctx context.Context) string {
 func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
 	eligibility := authSelectionEligibility{disallowFreeAuth: disallowFreeAuthFromMetadata(opts.Metadata)}
 	if ctx != nil {
+		eligibility.oauthGroup = OAuthGroupFromContext(ctx)
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
 		eligibility.credentialPolicy, _ = ctx.Value(credentialPolicyContextKey{}).(string)
 	}
@@ -131,6 +133,9 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 
 func (e authSelectionEligibility) allows(auth *Auth) bool {
 	if auth == nil {
+		return false
+	}
+	if e.oauthGroup != "" && !auth.InOAuthGroup(e.oauthGroup) {
 		return false
 	}
 	if e.requiredKind != "" && auth.AuthKind() != e.requiredKind {
@@ -245,6 +250,15 @@ func reconcileAggregatedAuthState(auth *Auth, now time.Time) {
 // reachable either directly or via alias routes are pruned entirely so
 // renamed/removed models cannot keep auth-level status stale.
 func (m *Manager) ReconcileRegistryModelStates(ctx context.Context, authID string) {
+	m.reconcileRegistryModelStates(ctx, authID, nil)
+}
+
+// ReconcileRegistryModelStatesAtEpoch retires model state only for the specified publication.
+func (m *Manager) ReconcileRegistryModelStatesAtEpoch(ctx context.Context, authID string, epoch uint64) {
+	m.reconcileRegistryModelStates(ctx, authID, &epoch)
+}
+
+func (m *Manager) reconcileRegistryModelStates(ctx context.Context, authID string, expectedEpoch *uint64) {
 	if m == nil || authID == "" {
 		return
 	}
@@ -273,6 +287,9 @@ func (m *Manager) ReconcileRegistryModelStates(ctx context.Context, authID strin
 		isCopilot := isCopilotAuth(auth)
 		for retry := 0; retry < 10; retry++ {
 			supportedModels, regEpoch = globalReg.GetModelsAndEpochForClient(authID)
+			if expectedEpoch != nil && regEpoch != *expectedEpoch {
+				break
+			}
 			// Before the first Copilot publication there is no catalog to reconcile against.
 			if isCopilot && regEpoch == 0 && len(supportedModels) == 0 {
 				if globalReg.ClientRegistrationEpoch(authID) != regEpoch {
@@ -1264,7 +1281,7 @@ func schedulerAuthCandidates(auths []*Auth) []pluginapi.SchedulerAuthCandidate {
 			Provider:   strings.ToLower(strings.TrimSpace(auth.Provider)),
 			Priority:   authPriority(auth),
 			Status:     string(auth.Status),
-			Attributes: schedulerSafeAttributes(auth.Attributes),
+			Attributes: nativeProbeSchedulerAttributes(auth),
 		})
 	}
 	return out
@@ -1406,8 +1423,8 @@ func filterAuthsExcluding(auths []*Auth, excluded map[string]struct{}) []*Auth {
 	return filtered
 }
 
-func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginScheduler, provider string, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}, candidates []*Auth) (*Auth, bool, map[string]struct{}, error) {
-	if scheduler == nil || len(candidates) == 0 {
+func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginScheduler, provider string, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}, candidates []*Auth, lookup []pluginapi.SchedulerAuthCandidate) (*Auth, bool, map[string]struct{}, error) {
+	if scheduler == nil || (len(candidates) == 0 && len(lookup) == 0) {
 		clearSchedulerSelectionID(opts.Metadata)
 		return nil, false, nil, nil
 	}
@@ -1430,12 +1447,14 @@ func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginSc
 		requestProvider = ""
 	}
 	req := pluginapi.SchedulerPickRequest{
-		Provider:   requestProvider,
-		Providers:  schedulerProviders(providerKey, providers),
-		Model:      model,
-		Stream:     opts.Stream,
-		Options:    schedulerOptions(opts),
-		Candidates: schedulerAuthCandidates(candidates),
+		Provider:                 requestProvider,
+		Providers:                schedulerProviders(providerKey, providers),
+		Model:                    model,
+		Stream:                   opts.Stream,
+		Options:                  schedulerOptions(opts),
+		Candidates:               schedulerAuthCandidates(candidates),
+		LookupCandidatesProvided: lookup != nil,
+		LookupCandidates:         lookup,
 	}
 	resp, handled, errPick := scheduler.PickAuth(ctx, req)
 	if errPick != nil {
@@ -1457,10 +1476,21 @@ func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginSc
 		return nil, true, nil, wrapSchedulerRejectError(&Error{Code: rejectCode, Message: rejectMessage})
 	}
 	if selected := pickSchedulerAuthByID(candidates, resp.AuthID); selected != nil {
+		if lookup != nil {
+			current, errCurrent := m.revalidateSchedulerSelection(ctx, selected, model, opts, tried)
+			if errCurrent != nil {
+				return nil, true, nil, errCurrent
+			}
+			selected = current
+		}
 		keepSelectionID = true
 		return selected, true, nil, nil
 	}
 
+	// A lookup-only callback can diagnose or reject, never bypass availability.
+	if len(candidates) == 0 {
+		return nil, false, excluded, nil
+	}
 	strategy, okStrategy := builtinSchedulerStrategy(resp.DelegateBuiltin)
 	if !okStrategy {
 		return nil, false, nil, nil
@@ -2434,6 +2464,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	pinnedAuthID := pinnedAuthIDFromMetadata(opts.Metadata)
 	eligibility := authSelectionEligibilityForRequest(ctx, opts)
 	pluginScheduler, schedulerAcross := m.snapshotPluginScheduler()
+	schedulerLookup := pluginSchedulerWantsLookupCandidates(pluginScheduler)
 
 	m.mu.RLock()
 	selector := m.selector
@@ -2505,9 +2536,13 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		selectorAuths []*Auth
 		errAvailable  error
 	)
+	var lookup []pluginapi.SchedulerAuthCandidate
+	if schedulerLookup {
+		lookup = m.schedulerLookupCandidates(candidates, model, now)
+	}
 	if len(candidates) > 0 {
 		available, selectorAuths, errAvailable = m.availableAuthsForSelector(ctx, selector, candidates, provider, model, now, schedulerAcross, opts.Headers)
-		if errAvailable != nil && !canInspectUnavailableAffinity {
+		if errAvailable != nil && !canInspectUnavailableAffinity && len(lookup) == 0 {
 			m.mu.RUnlock()
 			m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errAvailable)
 			return nil, nil, errAvailable
@@ -2525,11 +2560,15 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	transientAuthIDs := m.transientlyUnavailableSessionAffinityAuthIDs(ctx, selector, affinityCandidates, model, now, opts.Headers)
 	m.mu.RUnlock()
 
-	selected, handled, excluded, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, available)
+	selected, handled, excluded, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, provider, []string{provider}, model, opts, tried, available, lookup)
 	effectiveTried := mergeTriedAuthIDs(tried, excluded)
 	if errPick != nil {
 		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, effectiveTried, errPick)
 		return nil, nil, errPick
+	}
+	if errAvailable != nil && !canInspectUnavailableAffinity {
+		m.warnLogAuthUnavailable(ctx, []string{provider}, model, opts, tried, errAvailable)
+		return nil, nil, errAvailable
 	}
 	if !handled {
 		if len(excluded) > 0 {
@@ -2928,6 +2967,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		return nil, nil, "", &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
 	pluginScheduler, schedulerAcross := m.snapshotPluginScheduler()
+	schedulerLookup := pluginSchedulerWantsLookupCandidates(pluginScheduler)
 
 	m.mu.RLock()
 	selector := m.selector
@@ -3003,9 +3043,13 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		selectorAuths []*Auth
 		errAvailable  error
 	)
+	var lookup []pluginapi.SchedulerAuthCandidate
+	if schedulerLookup {
+		lookup = m.schedulerLookupCandidates(candidates, model, now)
+	}
 	if len(candidates) > 0 {
 		available, selectorAuths, errAvailable = m.availableAuthsForSelector(ctx, selector, candidates, "mixed", model, now, schedulerAcross, opts.Headers)
-		if errAvailable != nil && !canInspectUnavailableAffinity {
+		if errAvailable != nil && !canInspectUnavailableAffinity && len(lookup) == 0 {
 			m.mu.RUnlock()
 			m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errAvailable)
 			return nil, nil, "", errAvailable
@@ -3023,11 +3067,15 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 	transientAuthIDs := m.transientlyUnavailableSessionAffinityAuthIDs(ctx, selector, affinityCandidates, model, now, opts.Headers)
 	m.mu.RUnlock()
 
-	selected, handled, excluded, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, available)
+	selected, handled, excluded, errPick := m.pickViaPluginScheduler(ctx, pluginScheduler, "mixed", providers, model, opts, tried, available, lookup)
 	effectiveTried := mergeTriedAuthIDs(tried, excluded)
 	if errPick != nil {
 		m.warnLogAuthUnavailable(ctx, providers, model, opts, effectiveTried, errPick)
 		return nil, nil, "", errPick
+	}
+	if errAvailable != nil && !canInspectUnavailableAffinity {
+		m.warnLogAuthUnavailable(ctx, providers, model, opts, tried, errAvailable)
+		return nil, nil, "", errAvailable
 	}
 	if !handled {
 		if len(excluded) > 0 {

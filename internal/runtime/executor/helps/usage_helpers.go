@@ -40,6 +40,7 @@ type UsageReporter struct {
 	executorType         string
 	model                string
 	alias                string
+	authIdentity         string
 	authID               string
 	authIndex            string
 	authMu               sync.RWMutex
@@ -154,6 +155,7 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 		stream:          usage.StreamFromContext(ctx),
 	}
 	if auth != nil {
+		reporter.authIdentity = codexUsageAuthIdentity(provider, auth)
 		reporter.authID = auth.ID
 		reporter.authIndex = auth.EnsureIndex()
 		reporter.accessTokenHash = authAccessTokenSHA256(auth)
@@ -615,6 +617,7 @@ func (r *UsageReporter) buildAdditionalModelRecord(model string, detail usage.De
 	}
 	rec := r.buildRecordForModel(model, detail, false, usage.Failure{})
 	rec.RequestID = uuid.NewString()
+	rec.Supplemental = true
 	if rec.HomeSelection != nil {
 		// Split billing details do not represent another scheduled request.
 		// Mark them separately without changing the primary usage metadata.
@@ -775,12 +778,14 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		AuthID:               r.authID,
 		AuthIndex:            r.authIndex,
 		AccessTokenSHA256:    r.accessTokenFingerprint(),
+		AuthIdentity:         r.authIdentity,
 		AuthType:             r.authType,
 		ReasoningEffort:      r.reasoning,
 		ServiceTier:          r.serviceTier,
 		EffectiveServiceTier: r.effectiveServiceTier,
 		ResponseServiceTier:  strings.TrimSpace(detail.ResponseServiceTier),
 		ResponseModel:        responseModel,
+		ResponseStatus:       detail.ResponseStatus,
 		Generate:             usage.GenerateFlag(r.generate),
 		Stream:               r.stream,
 		RequestedAt:          r.requestedAt,
@@ -818,6 +823,11 @@ func failFromErrorsWithRules(rules []internalconfig.RequestScopedErrorRule, errs
 		fail := usage.Failure{
 			Body:       body,
 			StatusCode: clienterror.HTTPStatusFromError(err),
+		}
+		if errors.Is(err, context.Canceled) {
+			fail.Code = "context_canceled"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			fail.Code = "context_deadline_exceeded"
 		}
 		if truncatedErr, ok := errors.AsType[cliproxyexecutor.StreamTruncatedError](err); ok && truncatedErr != nil && truncatedErr.IsStreamTruncated() {
 			fail.Code = usage.FailureStreamTruncatedCode
@@ -1094,7 +1104,7 @@ func (b *StreamUsageBuffer) Observe(detail usage.Detail, ok bool) {
 		return
 	}
 	responseServiceTier := strings.TrimSpace(detail.ResponseServiceTier)
-	if responseServiceTier == "" || hasNonZeroTokenUsage(detail) || hasStructuredUsageDetail(detail) {
+	if responseServiceTier == "" || hasNonZeroTokenUsage(detail) || hasStructuredUsageDetail(detail) || hasObservedTokens(detail.Observed) {
 		preservedTier := b.detail.ResponseServiceTier
 		preservedUpstreamTier := b.detail.UpstreamServiceTier
 		b.detail = detail
@@ -1636,7 +1646,7 @@ func (b *StreamUsageBuffer) ObserveResponsesStream(line []byte) bool {
 		}
 	}
 	detail, ok := ParseCodexUsageWithOutputItems(payload, b.responsesOutputByIndex, b.responsesOutputFallback)
-	if !ok || (!hasNonZeroTokenUsage(detail) && !hasStructuredUsageDetail(detail) && detail.ResponseServiceTier == "") {
+	if !ok || (!hasNonZeroTokenUsage(detail) && !hasStructuredUsageDetail(detail) && !hasObservedTokens(detail.Observed) && detail.ResponseServiceTier == "" && detail.ResponseStatus == "") {
 		return false
 	}
 	b.Observe(detail, true)
@@ -1658,15 +1668,19 @@ func ParseCodexUsageWithOutputItems(data []byte, itemsByIndex map[int64][]byte, 
 	root := util.ParseGJSONBytesNoCopy(data)
 	usageNode := root.Get("response.usage")
 	detail, ok := parseOpenAIStyleUsageWithCache(root, usageNode)
+	responseStatus := codexUsageResponseStatus(root)
 	if !ok {
-		if responseServiceTier == "" {
+		if responseServiceTier == "" && responseStatus == "" {
 			return usage.Detail{}, false
 		}
 		return usage.Detail{
+			ResponseStatus:      responseStatus,
 			ResponseServiceTier: responseServiceTier,
 			UpstreamServiceTier: responseServiceTier,
 		}, true
 	}
+	detail.ResponseStatus = responseStatus
+	detail.Observed = codexObservedTokens([]byte(usageNode.Raw))
 	detail.ResponseServiceTier = responseServiceTier
 	if detail.UpstreamServiceTier == "" {
 		detail.UpstreamServiceTier = responseServiceTier

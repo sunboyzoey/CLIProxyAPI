@@ -41,6 +41,8 @@ func (s *Service) Run(ctx context.Context) error {
 	ctx, runCancel := context.WithCancel(ctx)
 	s.cfgMu.Lock()
 	s.antigravityContext = ctx
+	catalogWake := make(chan struct{}, 1)
+	s.codexCatalogWake = catalogWake
 	s.cfgMu.Unlock()
 	s.homeMu.Lock()
 	s.runCancel = runCancel
@@ -108,6 +110,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	if !homeEnabled {
 		s.startCopilotCatalogRefresh(ctx)
+		go s.runCodexAccountCatalogs(ctx, catalogWake)
 		tokenResult, err := s.tokenProvider.Load(ctx, cfg)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			return err

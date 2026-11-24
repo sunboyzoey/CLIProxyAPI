@@ -616,3 +616,22 @@ func TestHostRouteModelSkipsOAuthOnlyExecutorTargets(t *testing.T) {
 		t.Fatalf("RouteModel() = %#v, %v; want fallback executor handled", resp, ok)
 	}
 }
+
+func TestHostRouteModelAlphaSearchPreservesRejectionWithoutExecutor(t *testing.T) {
+	host := newRouteModelHostWithRecords(capabilityRecord{
+		id: "search-router",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			ModelRouter: modelRouterFunc(func(context.Context, pluginapi.ModelRouteRequest) (pluginapi.ModelRouteResponse, error) {
+				return pluginapi.ModelRouteResponse{Handled: true, TargetKind: pluginapi.ModelRouteTargetSelf, Reason: "search_model_not_configured"}, nil
+			}),
+		}},
+	})
+	resp, handled := host.RouteModel(context.Background(), pluginapi.ModelRouteRequest{SourceFormat: "codex-alpha-search", RequestedModel: "bps/unknown"})
+	if !handled || !resp.Handled || resp.Reason != "search_model_not_configured" {
+		t.Fatalf("explicit search rejection lost: %#v, handled=%v", resp, handled)
+	}
+	_, handled = host.RouteModel(context.Background(), pluginapi.ModelRouteRequest{SourceFormat: "openai", RequestedModel: "bps/unknown"})
+	if handled {
+		t.Fatal("ordinary generation must still require a compatible executor")
+	}
+}

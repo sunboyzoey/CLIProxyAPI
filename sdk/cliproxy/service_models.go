@@ -45,9 +45,9 @@ func (s *Service) registerModelsForAuthWithConfigAndCache(ctx context.Context, c
 	// not overwrite or remove the newer registration when it finishes last.
 	fence := newModelRegistrationFence(a, cfg)
 	s.cancelStaleAntigravityProbes(a.ID)
-	if a.Disabled {
+	if a.Disabled || (fence.codexDirectory && a.Status == coreauth.StatusDisabled) {
 		if s != nil && s.coreManager != nil {
-			if current, ok := s.coreManager.GetByID(a.ID); ok && current != nil && !current.Disabled {
+			if current, ok := s.coreManager.GetByID(a.ID); ok && current != nil && !current.Disabled && (!fence.codexDirectory || current.Status != coreauth.StatusDisabled) {
 				return false
 			}
 		}
@@ -81,8 +81,10 @@ func (s *Service) registerModelsForAuthWithConfigAndCache(ctx context.Context, c
 			excluded = strings.Split(val, ",")
 		}
 	}
-	if handled, published := s.tryRegisterPluginModelsForAuthWithConfigFenced(ctx, cfg, a, fence, provider, authKind, excluded); handled {
-		return published
+	if !fence.codexDirectory {
+		if handled, published := s.tryRegisterPluginModelsForAuthWithConfigFenced(ctx, cfg, a, fence, provider, authKind, excluded); handled {
+			return published
+		}
 	}
 	if ctx.Err() != nil {
 		return true
@@ -152,6 +154,23 @@ func (s *Service) registerModelsForAuthWithConfigAndCache(ctx context.Context, c
 			}
 		}
 	case "codex":
+		if fence.codexDirectory {
+			tiers, ok := helps.CachedCodexAccountTiersForConfig(cfg, a)
+			if ok {
+				fence.codexCheckedAt = tiers.CheckedAt
+				models = codexAccountCatalogModels(tiers.CatalogModels)
+				if s.coreManager != nil {
+					defer func() {
+						if published && ctx.Err() == nil {
+							s.coreManager.ReconcileRegistryModelStatesAtEpoch(ctx, a.ID, fence.registryEpoch+1)
+						}
+					}()
+				}
+			} else {
+				s.wakeCodexAccountCatalogs()
+			}
+			break
+		}
 		if authKind == "apikey" {
 			if entry := resolveConfigCodexKeyForConfig(cfg, a); entry != nil {
 				models = buildCodexConfigModels(entry)
@@ -325,7 +344,10 @@ func (s *Service) registerModelsForAuthWithConfigAndCache(ctx context.Context, c
 	if key == "" {
 		key = strings.ToLower(strings.TrimSpace(a.Provider))
 	}
-	staticModels := s.pluginModelsForProvider(key)
+	var staticModels []*ModelInfo
+	if !fence.codexDirectory {
+		staticModels = s.pluginModelsForProvider(key)
+	}
 	if provider == "copilot" {
 		// Copilot plugin routes share the account catalog's namespace and OAuth aliases.
 		models = appendDistinctModels(models, s.copilotPublicPluginModels(a, staticModels))
@@ -339,7 +361,7 @@ func (s *Service) registerModelsForAuthWithConfigAndCache(ctx context.Context, c
 	models = appendDistinctModels(models, applyExcludedModels(staticModels, excluded))
 	if len(models) > 0 {
 		models = applyOAuthSettingsForAuth(cfg, provider, authKind, models)
-		published = s.registerResolvedModelsForAuthFenced(a, fence, key, applyModelPrefixes(models, a.Prefix, cfg != nil && cfg.ForceModelPrefix))
+		published = s.registerResolvedModelsForAuthFenced(a, fence, key, applyAuthModelPrefixes(models, a, cfg != nil && cfg.ForceModelPrefix))
 		if strings.EqualFold(strings.TrimSpace(a.Provider), "antigravity") {
 			s.asyncProbeAntigravityCapabilities(ctx, a, key)
 		}
@@ -763,7 +785,25 @@ func cloneModelInfoForCatalogRoute(model *ModelInfo) ModelInfo {
 	return clone
 }
 
+func applyAuthModelPrefixes(models []*ModelInfo, a *coreauth.Auth, force bool) []*ModelInfo {
+	if a.Prefix == "" || force || a.OAuthAccountGroup() == "" {
+		return applyModelPrefixes(models, a.Prefix, force)
+	}
+	// An explicitly published ID wins a collision with a generated compatibility route.
+	explicit := make(map[string]bool, len(models))
+	for _, model := range models {
+		if model != nil {
+			explicit[strings.TrimSpace(model.ID)] = true
+		}
+	}
+	return publishModelPrefixes(models, a.Prefix, false, explicit)
+}
+
 func applyModelPrefixes(models []*ModelInfo, prefix string, forceModelPrefix bool) []*ModelInfo {
+	return publishModelPrefixes(models, prefix, forceModelPrefix, nil)
+}
+
+func publishModelPrefixes(models []*ModelInfo, prefix string, forceModelPrefix bool, oauthNames map[string]bool) []*ModelInfo {
 	trimmedPrefix := strings.TrimSpace(prefix)
 	if trimmedPrefix == "" || len(models) == 0 {
 		return models
@@ -815,6 +855,12 @@ func applyModelPrefixes(models []*ModelInfo, prefix string, forceModelPrefix boo
 		}
 		clone := cloneModelInfoForCatalogRoute(model)
 		clone.ID = prefixedID
+		if oauthNames != nil {
+			if oauthNames[clone.ID] {
+				continue
+			}
+			clone.OptionalOAuthPrefix = true
+		}
 		if clone.MetadataModelID == "" {
 			clone.MetadataModelID = baseID
 		}

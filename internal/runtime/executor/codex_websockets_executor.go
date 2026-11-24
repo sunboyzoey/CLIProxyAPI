@@ -38,11 +38,9 @@ func NewCodexWebsocketsExecutor(cfg *config.Config) *CodexWebsocketsExecutor {
 	}
 }
 
-// CodexAutoExecutor routes Codex requests to the websocket transport only when:
-//  1. The downstream transport is websocket, and
-//  2. The selected auth enables websockets.
-//
-// For non-websocket downstream requests, it always uses the legacy HTTP implementation.
+// CodexAutoExecutor selects the upstream transport. Client websocket requests
+// use the websockets account flag; HTTP Responses streams have an independent,
+// OAuth-only http_sse_websockets opt-in.
 type CodexAutoExecutor struct {
 	httpExec *CodexExecutor
 	wsExec   *CodexWebsocketsExecutor
@@ -98,6 +96,9 @@ func (e *CodexAutoExecutor) ExecuteStream(ctx context.Context, auth *cliproxyaut
 	}
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
 		return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
+	}
+	if codexHTTPWebsocketsEnabled(ctx, auth, req, opts) {
+		return e.wsExec.ExecuteStream(helps.WithCodexHTTPWebsocket(ctx), auth, req, opts)
 	}
 	return e.httpExec.ExecuteStream(ctx, auth, req, opts)
 }
@@ -285,4 +286,31 @@ func (e *CodexWebsocketsExecutor) InterruptExecutionSession(ctx context.Context,
 	}
 	log.WithField("outcome", "forwarded").Debug("codex websockets: response.interrupt handled")
 	return nil
+}
+
+// codexHTTPWebsocketsEnabled deliberately excludes protocol bridges, compact
+// requests and incremental continuations that depend on a specific connection.
+func codexHTTPWebsocketsEnabled(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) bool {
+	if auth == nil || auth.Provider != "codex" || auth.AuthKind() != cliproxyauth.AuthKindOAuth || codexAuthUsesAPIKey(auth) ||
+		cliproxyexecutor.DownstreamWebsocket(ctx) || opts.Alt != "" ||
+		opts.SourceFormat != sdktranslator.FormatOpenAIResponse ||
+		codexUseSIWCForRequest(ctx, auth, opts.Headers) {
+		return false
+	}
+	enabled, _ := auth.Metadata["http_sse_websockets"].(bool)
+	switch opts.UpstreamTransport {
+	case "http":
+		return false
+	case "websocket":
+		enabled = true
+	}
+	if !enabled {
+		return false
+	}
+	stream := ojson.GetBytesNoCopy(req.Payload, "stream")
+	if stream.Raw != "true" {
+		return false
+	}
+	previous := ojson.GetBytesNoCopy(req.Payload, "previous_response_id")
+	return !previous.Exists() || previous.Raw == "null" || previous.Raw == "\"\""
 }

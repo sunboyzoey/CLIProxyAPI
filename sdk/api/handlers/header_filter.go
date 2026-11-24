@@ -9,6 +9,8 @@ import (
 // proxies. Claude Code's client-side telemetry detects these and reports the
 // gateway type, so we strip them from upstream responses to avoid detection.
 var gatewayHeaderPrefixes = []string{
+	"x-bps-",
+	"x-basispoints-",
 	"x-litellm-",
 	"helicone-",
 	"x-portkey-",

@@ -50,7 +50,7 @@ type rpcStreamEmitRequest struct {
 	Payload  []byte `json:"payload,omitempty"`
 	Error    string `json:"error,omitempty"`
 	// ErrorDetail optionally carries the structured plugin error (status, code,
-	// retry-after). It takes precedence over Error when present.
+	// retry-after, credential scope). It takes precedence over Error when present.
 	ErrorDetail *pluginabi.Error `json:"error_detail,omitempty"`
 }
 
@@ -58,7 +58,7 @@ type rpcStreamCloseRequest struct {
 	StreamID string `json:"stream_id"`
 	Error    string `json:"error,omitempty"`
 	// ErrorDetail optionally carries the structured plugin error (status, code,
-	// retry-after). It takes precedence over Error when present.
+	// retry-after, credential scope). It takes precedence over Error when present.
 	ErrorDetail *pluginabi.Error `json:"error_detail,omitempty"`
 }
 
@@ -79,6 +79,8 @@ func rpcStreamError(message string, detail *pluginabi.Error) error {
 			message:           text,
 			statusCode:        detail.HTTPStatus,
 			retryAfterSeconds: detail.RetryAfterSeconds,
+			credentialScope:   detail.CredentialScope,
+			requestScope:      detail.RequestScope,
 			credentialScoped:  detail.CredentialScoped,
 		}
 	}

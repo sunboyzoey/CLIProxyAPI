@@ -49,7 +49,7 @@ func ApplyPayloadConfigWithRequest(cfg *config.Config, model, protocol, fromProt
 // ApplyPayloadConfigWithRequestDoc applies payload config in place on doc using source protocol and request header gates.
 // Source model IDs can also be matched alongside the upstream and requested names.
 func ApplyPayloadConfigWithRequestDoc(cfg *config.Config, model, protocol, fromProtocol, root string, doc *ojson.Doc, original []byte, requestedModel string, requestPath string, headers http.Header, sourceModelIDs ...string) {
-	applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, "", model, protocol, fromProtocol, root, doc, original, requestedModel, requestPath, headers, nil, sourceModelIDs)
+	applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, "", model, protocol, fromProtocol, root, doc, original, requestedModel, requestPath, headers, nil, sourceModelIDs, codexTierRule{})
 }
 
 // ApplyPayloadConfigWithRequestForExecutor applies payload config with explicit target executor context.
@@ -103,10 +103,10 @@ func ApplyPayloadConfigWithTrackedPathsForExecutorDoc(cfg *config.Config, target
 }
 
 func applyPayloadConfigWithTrackedPathsForExecutorDoc(cfg *config.Config, targetExecutor, model, protocol, fromProtocol, root string, doc *ojson.Doc, original []byte, requestedModel, requestPath string, headers http.Header, trackedPaths ...string) (map[string]bool, bool) {
-	return applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, targetExecutor, model, protocol, fromProtocol, root, doc, original, requestedModel, requestPath, headers, nil, nil, trackedPaths...)
+	return applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, targetExecutor, model, protocol, fromProtocol, root, doc, original, requestedModel, requestPath, headers, nil, nil, codexTierRule{}, trackedPaths...)
 }
 
-func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config, targetExecutor, model, protocol, fromProtocol, root string, doc *ojson.Doc, original []byte, requestedModel, requestPath string, headers http.Header, auth *cliproxyauth.Auth, sourceModelIDs []string, trackedPaths ...string) (map[string]bool, bool) {
+func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config, targetExecutor, model, protocol, fromProtocol, root string, doc *ojson.Doc, original []byte, requestedModel, requestPath string, headers http.Header, auth *cliproxyauth.Auth, sourceModelIDs []string, tier codexTierRule, trackedPaths ...string) (map[string]bool, bool) {
 	payloadConfigEvaluations.Add(1)
 	touched := make(map[string]bool)
 	if doc == nil || doc.Len() == 0 {
@@ -118,9 +118,6 @@ func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config,
 			mutated = true
 		}
 	}
-	if cfg == nil {
-		return touched, mutated
-	}
 
 	markTouched := func(resolvedPath string) {
 		for _, tp := range trackedPaths {
@@ -129,6 +126,15 @@ func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config,
 				touched[tp] = true
 			}
 		}
+	}
+
+	// Resolve the policy on the prepared Codex body before applying user rules.
+	if tier.apply(doc, original, model) {
+		mutated = true
+		markTouched("service_tier")
+	}
+	if cfg == nil {
+		return touched, mutated
 	}
 
 	var strippedToolChoicePath string

@@ -112,6 +112,8 @@ type Service struct {
 	// accessManager handles request authentication providers.
 	accessManager *sdkaccess.Manager
 
+	codexCatalogWake chan struct{}
+
 	// coreManager handles core authentication and execution.
 	coreManager *coreauth.Manager
 

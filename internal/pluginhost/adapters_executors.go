@@ -13,6 +13,7 @@ import (
 
 	"github.com/MoeForge/moego/json"
 	"github.com/MoeForge/moego/ojson"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -1039,7 +1040,7 @@ func (a *executorAdapter) executeWithAttribution(ctx context.Context, auth *core
 		reporter.StartResponseTTFT()
 	}
 
-	pluginResp, errExecute := a.executor.Execute(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errExecute := a.executor.Execute(ctx, buildTracedExecutorRequest(ctx, a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errExecute != nil {
 		return coreexecutor.Response{}, nil, errExecute
 	}
@@ -1104,7 +1105,7 @@ func (a *executorAdapter) executeStreamWithAttribution(ctx context.Context, auth
 		reporter.StartResponseTTFT()
 	}
 
-	pluginResp, errExecuteStream := a.executor.ExecuteStream(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errExecuteStream := a.executor.ExecuteStream(ctx, buildTracedExecutorRequest(ctx, a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errExecuteStream != nil {
 		return nil, nil, errExecuteStream
 	}
@@ -1242,7 +1243,7 @@ func (a *executorAdapter) Refresh(ctx context.Context, auth *coreauth.Auth) (ref
 		}
 	}()
 
-	pluginResp, errRefresh := authProv.RefreshAuth(ctx, pluginapi.AuthRefreshRequest{
+	refreshRequest := pluginapi.AuthRefreshRequest{
 		AuthID:       authID(auth),
 		AuthProvider: authProvider(auth),
 		StorageJSON:  storageJSONFromAuth(auth),
@@ -1250,7 +1251,12 @@ func (a *executorAdapter) Refresh(ctx context.Context, auth *coreauth.Auth) (ref
 		Attributes:   authAttributes(auth),
 		Host:         a.host.hostConfigSummary(),
 		HTTPClient:   a.host.newHTTPClient(auth),
-	})
+	}
+	restoreProbeProxy, errProbeProxy := a.host.prepareBPSProbeRefresh(ctx, auth, &refreshRequest)
+	if errProbeProxy != nil {
+		return nil, errProbeProxy
+	}
+	pluginResp, errRefresh := authProv.RefreshAuth(ctx, refreshRequest)
 	if errRefresh != nil {
 		return nil, errRefresh
 	}
@@ -1302,6 +1308,11 @@ func (a *executorAdapter) Refresh(ctx context.Context, auth *coreauth.Auth) (ref
 	if !pluginResp.NextRefreshAfter.IsZero() {
 		data.NextRefreshAfter = pluginResp.NextRefreshAfter
 	}
+	if restoreProbeProxy != nil {
+		if errRestore := restoreProbeProxy(&data); errRestore != nil {
+			return nil, errRestore
+		}
+	}
 	path := ""
 	if auth != nil && auth.Attributes != nil {
 		path = auth.Attributes[coreauth.AttributePath]
@@ -1333,7 +1344,7 @@ func (a *executorAdapter) CountTokens(ctx context.Context, auth *coreauth.Auth, 
 	if errPrepare != nil {
 		return coreexecutor.Response{}, errPrepare
 	}
-	pluginResp, errCountTokens := a.executor.CountTokens(ctx, buildExecutorRequest(a.host, a.provider, auth, prepared.req, prepared.opts))
+	pluginResp, errCountTokens := a.executor.CountTokens(ctx, buildTracedExecutorRequest(ctx, a.host, a.provider, auth, prepared.req, prepared.opts))
 	if errCountTokens != nil {
 		return coreexecutor.Response{}, errCountTokens
 	}
@@ -1522,4 +1533,17 @@ func mapExecutorStreamChunks(ctx context.Context, in <-chan pluginapi.ExecutorSt
 		}
 	}()
 	return out
+}
+
+// The host trace ID is authoritative; client metadata cannot override it.
+func buildTracedExecutorRequest(ctx context.Context, host *Host, provider string, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) pluginapi.ExecutorRequest {
+	result := buildExecutorRequest(host, provider, auth, req, opts)
+	if result.Metadata == nil {
+		result.Metadata = make(map[string]any)
+	}
+	delete(result.Metadata, "cpa_request_id")
+	if id := logging.GetRequestID(ctx); id != "" {
+		result.Metadata["cpa_request_id"] = id
+	}
+	return result
 }

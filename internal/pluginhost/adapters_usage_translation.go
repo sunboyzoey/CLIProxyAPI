@@ -601,6 +601,7 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 	}
 	a.host.dispatchPluginUsageRecord(ctx, a.pluginID, pluginapi.UsageRecord{
 		RequestID:            requestID,
+		Supplemental:         record.Supplemental,
 		TraceID:              traceID,
 		SelectionID:          selectionID,
 		Provider:             record.Provider,
@@ -615,6 +616,7 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 		ParentSessionID:      parentSessionID,
 		AuthID:               record.AuthID,
 		AuthIndex:            record.AuthIndex,
+		AuthIdentity:         record.AuthIdentity,
 		AuthType:             record.AuthType,
 		Source:               record.Source,
 		ReasoningEffort:      record.ReasoningEffort,
@@ -622,6 +624,7 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 		EffectiveServiceTier: record.EffectiveServiceTier,
 		ResponseServiceTier:  record.ResponseServiceTier,
 		ResponseModel:        record.ResponseModel,
+		ResponseStatus:       record.ResponseStatus,
 		Generate:             coreusage.GenerateEnabled(record.Generate),
 		Stream:               record.Stream,
 		RequestedAt:          record.RequestedAt,
@@ -629,10 +632,12 @@ func (a *usageAdapter) HandleUsage(ctx context.Context, record coreusage.Record)
 		TTFT:                 record.TTFT,
 		Failed:               record.Failed,
 		Failure: pluginapi.UsageFailure{
+			Code:       record.Fail.Code,
 			StatusCode: record.Fail.StatusCode,
 			Body:       record.Fail.Body,
 		},
 		Detail: pluginapi.UsageDetail{
+			Observed:              observedUsageTokens(record.Detail.Observed),
 			InputTokens:           record.Detail.InputTokens,
 			OutputTokens:          record.Detail.OutputTokens,
 			ReasoningTokens:       record.Detail.ReasoningTokens,
@@ -849,4 +854,19 @@ func (h *Host) callResponseTranslator(ctx context.Context, record capabilityReco
 		return nil, false
 	}
 	return bytes.Clone(resp.Body), true
+}
+
+// Copy pointer counters so a plugin never retains mutable provider-owned values.
+func observedUsageTokens(in *coreusage.ObservedTokens) *pluginapi.UsageObservedTokens {
+	if in == nil {
+		return nil
+	}
+	clone := func(p *int64) *int64 {
+		if p == nil {
+			return nil
+		}
+		n := *p
+		return &n
+	}
+	return &pluginapi.UsageObservedTokens{InputTokens: clone(in.InputTokens), OutputTokens: clone(in.OutputTokens), ReasoningTokens: clone(in.ReasoningTokens), TotalTokens: clone(in.TotalTokens), CacheReadTokens: clone(in.CacheReadTokens), CacheCreationTokens: clone(in.CacheCreationTokens)}
 }

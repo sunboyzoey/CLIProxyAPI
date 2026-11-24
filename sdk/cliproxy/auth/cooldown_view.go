@@ -133,6 +133,8 @@ func newCooldownView(scope, model string, next, now time.Time, quota QuotaState,
 
 func cooldownErrorReason(err *Error) string {
 	switch {
+	case isWebsocketHandshakeRejectedResultError(err):
+		return ErrorCodeWebsocketHandshakeRejected
 	case isModelSupportResultError(err):
 		return "model_not_supported"
 	case isCloudflareChallengeResultError(err):
@@ -178,6 +180,8 @@ func cooldownStatusReason(message string) string {
 		return "transient_error"
 	case transientRateLimitErrorCode:
 		return "transient_rate_limit"
+	case ErrorCodeWebsocketHandshakeRejected:
+		return ErrorCodeWebsocketHandshakeRejected
 	default:
 		return "unknown"
 	}

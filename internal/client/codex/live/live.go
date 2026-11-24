@@ -244,11 +244,17 @@ func (h *Handler) Handle(c *gin.Context) {
 		OriginalRequest: body,
 	}
 	ctx = handlers.EnrichContextWithSessionHierarchy(ctx, selectionOpts.Headers, body, nil)
-	selection, selected, errSelect := h.selectOAuth(ctx, model, selectionOpts)
+	selection, selected, releaseNative, errSelect := h.acquireOAuth(ctx, model, selectionOpts)
 	if errSelect != nil {
 		writeSelectionError(c, errSelect)
 		return
 	}
+	nativeRetained := false
+	defer func() {
+		if !nativeRetained {
+			releaseNative()
+		}
+	}()
 	if selected == nil {
 		if selection != nil {
 			selection.End("missing_auth")
@@ -406,12 +412,16 @@ func (h *Handler) Handle(c *gin.Context) {
 		h.authManager.ReportHomeUnauthorized(ctx, selected, "codex", model, responseBody)
 		log.WithField("status", resp.StatusCode).Warnf("codex live upstream request failed: %s", logging.SafeDiagnosticForLog(string(responseBody)))
 	}
+	if errContext := ctx.Err(); errContext != nil {
+		writeLiveError(c, clienterror.HTTPStatusFromErrorOr(errContext, http.StatusRequestTimeout), "Codex live request canceled")
+		return
+	}
 	responseBodyToWrite := responseBody
 	success := resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
 	callID := ""
 	if success {
 		callID = callIDFromLocation(resp.Header.Get("Location"))
-		if callID == "" && mediaSession != nil {
+		if callID == "" {
 			writeLiveError(c, http.StatusBadGateway, "Codex live response is missing a valid call ID")
 			return
 		}
@@ -448,6 +458,11 @@ func (h *Handler) Handle(c *gin.Context) {
 				sessionID:       clientMeta.SessionID,
 				parentSessionID: clientMeta.ParentSessionID,
 			}
+			// Keep standalone admission for the entire retained call. Session
+			// resources close on hangup, expiry, sideband/media termination,
+			// replacement, and server shutdown.
+			session.resources = &liveSessionResources{}
+			session.resources.add(func() error { releaseNative(); return nil })
 			session.ownerPrincipal, session.ownerProvider = requestOwner(c)
 			if principal, ok := c.Get(ClientSecretPrincipalContextKey); ok {
 				session.clientSecretPrincipal, _ = principal.(string)
@@ -476,6 +491,11 @@ func (h *Handler) Handle(c *gin.Context) {
 			}
 			storedSession = h.sessions.put(callID, session)
 			sessionStored = storedSession.callID != ""
+			nativeRetained = sessionStored
+			if !sessionStored {
+				writeLiveError(c, http.StatusServiceUnavailable, "Codex live session service stopped")
+				return
+			}
 			if mediaSession != nil {
 				mediaSession.SetCloseHandler(func(reason string) {
 					h.sessions.complete(storedSession, reason)
@@ -492,6 +512,9 @@ func (h *Handler) Handle(c *gin.Context) {
 		}
 		helps.RecordAPIResponseError(ctx, runtimeConfig, errWrite)
 		log.WithError(errWrite).Warn("codex live: write response body failed")
+	}
+	if sessionStored && ctx.Err() != nil {
+		h.sessions.complete(storedSession, "request_canceled")
 	}
 }
 

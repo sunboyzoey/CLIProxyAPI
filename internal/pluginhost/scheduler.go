@@ -104,6 +104,11 @@ func (h *Host) SchedulerWantsAllPriorityCandidates() bool {
 	return false
 }
 
+func (h *Host) SchedulerWantsLookupCandidates() bool {
+	record := h.schedulerRecord()
+	return record != nil && schedulerWantsLookupCandidates(record.plugin.Capabilities)
+}
+
 // HasSchedulerContinuity reports whether the active scheduler plugin provides SchedulerContinuity.
 func (h *Host) HasSchedulerContinuity() bool {
 	return h.schedulerContinuityRecord() != nil

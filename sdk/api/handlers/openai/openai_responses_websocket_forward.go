@@ -809,7 +809,7 @@ func buildResponsesWebsocketErrorPayload(errMsg *interfaces.ErrorMessage) ([]byt
 			}
 			hasHeaders = true
 		}
-		for key, values := range errMsg.Addon {
+		for key, values := range handlers.FilterUpstreamHeaders(errMsg.Addon) {
 			if len(values) == 0 || strings.TrimSpace(values[0]) == "" {
 				continue
 			}

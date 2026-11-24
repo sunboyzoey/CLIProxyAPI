@@ -92,6 +92,9 @@ func validateStartupConfig(data []byte, optional bool) (*startupConfig, error) {
 		return nil, fmt.Errorf("parse config payload: %w", err)
 	}
 
+	if errValidate := cfg.ValidateOAuthKeyGroups(); errValidate != nil {
+		return nil, errValidate
+	}
 	if errValidate := validateTrustedProxies(cfg.TrustedProxies); errValidate != nil {
 		return nil, errValidate
 	}

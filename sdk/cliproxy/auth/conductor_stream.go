@@ -718,7 +718,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				m.recordCanceledUpstreamCooldown(execCtx, auth, provider, resultModel, routeModel, execOpts, errStream, ephemeralResult, executionSeq)
 				return nil, errCtx
 			}
-			if allowRetry && !ephemeralResult {
+			if allowRetry && !ephemeralResult && !isRequestStopError(errStream) {
 				alreadyTried := didRefreshOnUnauthorized
 				refreshed, okRefresh := m.tryRefreshAfterUnauthorized(newUpstreamAttemptContext(execCtx), auth, errStream, alreadyTried, execOpts.Headers)
 				if okRefresh {
@@ -822,7 +822,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				m.recordCanceledUpstreamCooldown(execCtx, auth, provider, resultModel, routeModel, execOpts, bootstrapErr, ephemeralResult, executionSeq)
 				return nil, errCtx
 			}
-			if allowRetry && !ephemeralResult {
+			if allowRetry && !ephemeralResult && !isRequestStopError(bootstrapErr) {
 				alreadyTried := didRefreshOnUnauthorized
 				refreshed, okRefresh := m.tryRefreshAfterUnauthorized(newUpstreamAttemptContext(execCtx), auth, bootstrapErr, alreadyTried, execOpts.Headers)
 				if okRefresh {

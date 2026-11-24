@@ -130,6 +130,11 @@ type PluginSchedulerAcrossPriorities interface {
 	SchedulerWantsAcrossPriorities() bool
 }
 
+// PluginSchedulerLookupCandidates opts into a separate read-only selection scope.
+type PluginSchedulerLookupCandidates interface {
+	SchedulerWantsLookupCandidates() bool
+}
+
 // PluginSchedulerContinuity is an optional interface implemented by schedulers
 // that evaluate bounded pre-admission and pre-output-429 continuity for Codex requests.
 type PluginSchedulerContinuity interface {
@@ -216,6 +221,7 @@ type Manager struct {
 	auths              map[string]*Auth
 	authEpochs         map[string]uint64
 	authChangeWatchers map[string]map[chan struct{}]struct{}
+	nativeConcurrency  nativeConcurrencyState
 	scheduler          *authScheduler
 	// pluginScheduler runs outside m.mu before falling back to native selection.
 	pluginScheduler PluginScheduler

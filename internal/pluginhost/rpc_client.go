@@ -53,6 +53,8 @@ type rpcError struct {
 	message           string
 	statusCode        int
 	retryAfterSeconds int
+	credentialScope   bool
+	requestScope      bool
 	credentialScoped  bool
 }
 
@@ -69,11 +71,11 @@ func (e rpcError) StatusCode() int {
 }
 
 func (e rpcError) IsCredentialScoped() bool {
-	return e.credentialScoped || strings.EqualFold(strings.TrimSpace(e.Code), pluginabi.ErrorCodeCredentialQuota)
+	return e.credentialScope || e.credentialScoped || strings.EqualFold(strings.TrimSpace(e.Code), pluginabi.ErrorCodeCredentialQuota)
 }
 
 func (e rpcError) IsRequestScoped() bool {
-	return !e.IsCredentialScoped() && strings.EqualFold(strings.TrimSpace(e.Code), pluginabi.ErrorCodeRequestScoped)
+	return !e.IsCredentialScoped() && (e.requestScope || strings.EqualFold(strings.TrimSpace(e.Code), pluginabi.ErrorCodeRequestScoped))
 }
 
 func (e rpcError) IsTransientRateLimit() bool {
@@ -124,9 +126,14 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 		return pluginapi.Plugin{}, fmt.Errorf("plugin client is nil")
 	}
 	resp, errCall := callPlugin[rpcRegistration](ctx, client, method, rpcLifecycleRequest{
-		ConfigYAML:         bytes.Clone(configYAML),
-		SchemaVersion:      pluginabi.SchemaVersion,
-		MultiAuthProviders: pluginabi.SchemaVersion >= pluginabi.SchemaVersionMultiAuthProviders,
+		CodexHTTPWebsocketPolicyVersion: 1,
+		ConfigYAML:                      bytes.Clone(configYAML),
+		SchemaVersion:                   pluginabi.SchemaVersion,
+		MultiAuthProviders:              pluginabi.SchemaVersion >= pluginabi.SchemaVersionMultiAuthProviders,
+		CredentialScopeErrors:           true,
+		RequestScopeErrors:              true,
+		NativeOAuthManagement:           true,
+		CodexAlphaSearchPayloadVersion:  1,
 	})
 	if errCall != nil {
 		return pluginapi.Plugin{}, errCall
@@ -181,6 +188,7 @@ func registerRPCPlugin(ctx context.Context, host *Host, id string, client plugin
 	if resp.Capabilities.Scheduler {
 		plugin.Capabilities.Scheduler = adapter
 		plugin.Capabilities.SchedulerAcrossPriorities = resp.Capabilities.SchedulerAcrossPriorities
+		plugin.Capabilities.SchedulerLookupCandidates = resp.Capabilities.SchedulerLookupCandidates
 	}
 	if resp.Capabilities.SchedulerContinuity {
 		plugin.Capabilities.SchedulerContinuity = adapter
@@ -314,6 +322,9 @@ func sanitizePluginRequest(request any) any {
 		req.Options.Metadata = sanitizePluginMetadata(req.Options.Metadata)
 		for index := range req.Candidates {
 			req.Candidates[index].Metadata = sanitizePluginMetadata(req.Candidates[index].Metadata)
+		}
+		for index := range req.LookupCandidates {
+			req.LookupCandidates[index].Metadata = sanitizePluginMetadata(req.LookupCandidates[index].Metadata)
 		}
 		return req
 	case pluginapi.SchedulerContinuityRequest:
@@ -463,6 +474,8 @@ func decodeEnvelopeResult[T any](envelope pluginabi.Envelope) (T, error) {
 				message:           message,
 				statusCode:        envelope.Error.HTTPStatus,
 				retryAfterSeconds: envelope.Error.RetryAfterSeconds,
+				credentialScope:   envelope.Error.CredentialScope,
+				requestScope:      envelope.Error.RequestScope,
 				credentialScoped:  envelope.Error.CredentialScoped,
 			}
 		}

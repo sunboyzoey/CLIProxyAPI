@@ -22,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
@@ -430,6 +431,9 @@ func (h *OpenAIResponsesAPIHandler) authenticateResponsesWebsocketTurn(c *gin.Co
 	}
 	if result == nil {
 		return "", nil
+	}
+	if c != nil && !updateRequestContext && result.Metadata[sdkaccess.OAuthAccountGroup] != coreauth.AuthenticatedOAuthGroup(c) {
+		return "", &interfaces.ErrorMessage{StatusCode: http.StatusUnauthorized, Error: errors.New("credential group changed during the websocket stream; reconnect")}
 	}
 	if c != nil && updateRequestContext {
 		c.Set("userApiKey", result.Principal)
@@ -1038,9 +1042,10 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			cliCtx = cliproxyexecutor.WithWebsocketInputEpoch(cliCtx, &inputEpoch, msgEpoch)
 			if duplexInput != nil {
 				cliCtx = cliproxyexecutor.WithWebsocketInput(cliCtx, duplexInput)
+				boundGroup := coreauth.OAuthGroupFromContext(cliCtx)
 				cliCtx = cliproxyexecutor.WithWebsocketAuthCheck(cliCtx, func(authID string) bool {
 					current, ok := sessionAuthByID(authID)
-					return ok && current != nil && !current.Disabled && current.Status != coreauth.StatusDisabled
+					return ok && current != nil && !current.Disabled && current.Status != coreauth.StatusDisabled && (boundGroup == "" || current.InOAuthGroup(boundGroup))
 				})
 				boundPrincipal := usage.APIKeyFromContext(cliCtx)
 				cliCtx = cliproxyexecutor.WithWebsocketTurnAuthorizer(cliCtx, func(turnPayload []byte) ([]byte, error) {

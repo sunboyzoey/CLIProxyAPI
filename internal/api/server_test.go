@@ -2144,6 +2144,7 @@ func TestModelsWithClientVersionReturnsCodexCatalog(t *testing.T) {
 			MaxCompletionTokens: 64000,
 			Thinking:            &registry.ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}},
 		},
+		{ID: "gpt-6.2-astra", Object: "model", OwnedBy: "openai", Type: "openai"},
 		{
 			ID:            "custom-codex-model-test",
 			Object:        "model",
@@ -2204,11 +2205,14 @@ func TestModelsWithClientVersionReturnsCodexCatalog(t *testing.T) {
 	}
 
 	var gpt55 map[string]any
+	var gpt62Astra map[string]any
 	var custom map[string]any
 	for _, model := range resp.Models {
 		switch slug, _ := model["slug"].(string); slug {
 		case "gpt-5.5":
 			gpt55 = model
+		case "gpt-6.2-astra":
+			gpt62Astra = model
 		case "custom-codex-model-test":
 			custom = model
 		}
@@ -2228,6 +2232,17 @@ func TestModelsWithClientVersionReturnsCodexCatalog(t *testing.T) {
 	serviceTiers, ok := gpt55["service_tiers"].([]any)
 	if !ok || !hasCodexServiceTier(serviceTiers, "priority") {
 		t.Fatalf("expected gpt-5.5 priority service tier, got %#v", gpt55["service_tiers"])
+	}
+	if gpt62Astra == nil {
+		t.Fatal("expected gpt-6.2-astra codex catalog entry")
+	}
+	astraServiceTiers, ok := gpt62Astra["service_tiers"].([]any)
+	if !ok || len(astraServiceTiers) != 1 {
+		t.Fatalf("expected gpt-6.2-astra priority service tier, got %#v", gpt62Astra["service_tiers"])
+	}
+	priorityTier, ok := astraServiceTiers[0].(map[string]any)
+	if !ok || priorityTier["id"] != "priority" {
+		t.Fatalf("expected priority service tier ID, got %#v", astraServiceTiers[0])
 	}
 	if custom == nil {
 		t.Fatal("expected custom model codex catalog entry")

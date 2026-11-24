@@ -102,6 +102,11 @@ type Capabilities struct {
 	// in SchedulerPickRequest.Candidates. When false (default), Candidates only contains
 	// credentials from the highest available priority tier.
 	SchedulerAcrossPriorities bool
+	// SchedulerLookupCandidates opts into read-only, request-authorized candidates
+	// before availability filtering. Lookup candidates cannot be selected unless
+	// they are also present in Candidates. The scheduler may be called with an
+	// empty selectable set to diagnose continuation ownership.
+	SchedulerLookupCandidates bool
 	// SchedulerContinuity optionally evaluates bounded pre-admission continuity when
 	// eligible Codex credentials are waiting for quota recovery or after a pre-output 429.
 	SchedulerContinuity SchedulerContinuity
@@ -603,6 +608,12 @@ type SchedulerPickRequest struct {
 	Options SchedulerOptions
 	// Candidates contains auth records available for selection.
 	Candidates []SchedulerAuthCandidate
+	// LookupCandidatesProvided distinguishes a host-provided lookup scope from
+	// older hosts that do not support it. It is never supplied by the caller.
+	LookupCandidatesProvided bool
+	// LookupCandidates preserves provider, credential, model and retry restrictions
+	// while including unavailable credentials for read-only ownership checks.
+	LookupCandidates []SchedulerAuthCandidate
 }
 
 // SchedulerOptions carries request-scoped scheduler inputs.
@@ -627,6 +638,12 @@ type SchedulerAuthCandidate struct {
 	Attributes map[string]string
 	// Metadata contains mutable host-managed auth metadata.
 	Metadata map[string]any
+	// UnavailableReason is empty, "cooldown", or "blocked". These fields are
+	// supplied only for read-only LookupCandidates, not execution candidates.
+	UnavailableReason string
+	// RetryAfterSeconds is a rounded-up delay from the host's effective model or
+	// credential availability deadline. Zero means no known timed recovery.
+	RetryAfterSeconds int64
 }
 
 // SchedulerPickResponse returns a scheduler plugin routing decision.
@@ -1446,6 +1463,10 @@ type ResponseTransformRequest struct {
 
 // RequestInterceptRequest describes a request about to be executed upstream.
 type RequestInterceptRequest struct {
+	// Provider and AuthID identify the selected attempt after authentication.
+	// They are empty in before-auth calls and contain no credential secrets.
+	Provider string
+	AuthID   string
 	// RequestID uniquely identifies one model execution and correlates it with RequestCompletion.
 	RequestID string
 	// TraceID identifies the parent inbound HTTP request when available.
@@ -1473,6 +1494,10 @@ type RequestInterceptRequest struct {
 
 // RequestInterceptResponse returns request modifications.
 type RequestInterceptResponse struct {
+	// UpstreamTransport optionally selects http or websocket after auth selection.
+	// Hosts must advertise codex_http_websocket_policy_version >= 1; unsupported
+	// providers and request shapes retain their native eligibility restrictions.
+	UpstreamTransport string `json:"upstream_transport,omitempty"`
 	// Path optionally overrides the target request path (e.g. "/v1/images/generations").
 	Path string `json:"path,omitempty"`
 	// Headers replaces matching current request headers and preserves headers not mentioned here.
@@ -1860,6 +1885,8 @@ type ManagementResponse struct {
 type UsageRecord struct {
 	// RequestID uniquely identifies this specific model execution instance (UUID v4).
 	RequestID string
+	// Supplemental marks an additional-model accounting record, not a new execution.
+	Supplemental bool
 	// TraceID identifies the parent inbound HTTP request when available (8-character hex).
 	TraceID string
 	// SelectionID identifies the scheduler selection decision that produced this usage record when available.
@@ -1888,6 +1915,9 @@ type UsageRecord struct {
 	AuthID string
 	// AuthIndex identifies the credential index when applicable.
 	AuthIndex string
+	// AuthIdentity is the stable OAuth subject/account hash captured by the executor.
+	// It is empty when the host cannot establish a supported OAuth identity.
+	AuthIdentity string
 	// AuthType identifies the credential type.
 	AuthType string
 	// Source identifies the request source or integration.
@@ -1903,6 +1933,8 @@ type UsageRecord struct {
 	ResponseServiceTier string
 	// ResponseModel stores the model name reported by the upstream response, empty when unknown.
 	ResponseModel string
+	// ResponseStatus preserves a provider terminal status (completed, incomplete, failed).
+	ResponseStatus string
 	// Generate reports whether the client requested actual generation.
 	// The host normalizes omitted usage.Record values to true before delivery.
 	Generate bool
@@ -1926,14 +1958,28 @@ type UsageRecord struct {
 
 // UsageFailure describes an upstream or executor failure.
 type UsageFailure struct {
+	// Code carries a sanitized executor failure category, when available.
+	Code string
 	// StatusCode is the HTTP status code associated with the failure.
 	StatusCode int
 	// Body contains the failure response body or message.
 	Body string
 }
 
+// UsageObservedTokens preserves measured counters without treating missing values as zero.
+type UsageObservedTokens struct {
+	InputTokens         *int64
+	OutputTokens        *int64
+	ReasoningTokens     *int64
+	TotalTokens         *int64
+	CacheReadTokens     *int64
+	CacheCreationTokens *int64
+}
+
 // UsageDetail contains token accounting counters.
 type UsageDetail struct {
+	// Observed is available only for provider paths that preserve field presence.
+	Observed *UsageObservedTokens
 	// InputTokens is the prompt or input token count.
 	InputTokens int64
 	// OutputTokens is the completion or output token count.

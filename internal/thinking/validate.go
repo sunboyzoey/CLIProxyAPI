@@ -142,6 +142,9 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 		config.Level = ""
 	}
 
+	if config.Mode == ModeLevel && (config.Level == LevelXHigh || config.Level == LevelMax) && isLevelSupported(string(LevelHigh), support.Levels) && !isLevelSupported(string(LevelXHigh), support.Levels) && !isLevelSupported(string(LevelMax), support.Levels) {
+		config.Level = LevelHigh
+	}
 	if len(support.Levels) > 0 && config.Mode == ModeLevel && !isLevelSupported(string(config.Level), support.Levels) {
 		validLevels := normalizeLevels(support.Levels)
 		message := fmt.Sprintf("level %q not supported, valid levels: %s", strings.ToLower(string(config.Level)), strings.Join(validLevels, ", "))

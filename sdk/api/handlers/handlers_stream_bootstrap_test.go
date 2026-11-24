@@ -1333,3 +1333,54 @@ func TestExecuteStreamWithAuthManager_AllowsSplitOpenAIResponsesSSEEventLines(t 
 		t.Fatalf("unexpected second chunk.\nGot:  %q\nWant: %q", got[1], expectedData)
 	}
 }
+
+// A transport can report that response.create may already have executed, even
+// if a plugin drops every bootstrap event before the HTTP writer sees it.
+type sentBootstrapError struct{ cause *coreauth.Error }
+
+func (e sentBootstrapError) IsRequestStop() bool { return true }
+func (e sentBootstrapError) Error() string       { return e.cause.Error() }
+func (e sentBootstrapError) Unwrap() error       { return e.cause }
+func (e sentBootstrapError) StatusCode() int     { return e.cause.StatusCode() }
+
+func TestExecuteStreamWithAuthManager_DoesNotReplaySentRequest(t *testing.T) {
+	for _, mode := range []string{"execute error", "bootstrap error", "dropped event"} {
+		t.Run(mode, func(t *testing.T) {
+			sentErr := sentBootstrapError{&coreauth.Error{HTTPStatus: http.StatusUnauthorized, Code: "upstream_stream_incomplete", Message: "already sent"}}
+			executor := &bootstrapStreamExecutor{stream: func(_ context.Context, _ int) (*coreexecutor.StreamResult, error) {
+				if mode == "execute error" {
+					return nil, sentErr
+				}
+				chunks := make(chan coreexecutor.StreamChunk, 2)
+				if mode == "dropped event" {
+					chunks <- coreexecutor.StreamChunk{Payload: []byte("drop")}
+				}
+				chunks <- coreexecutor.StreamChunk{Err: sentErr}
+				close(chunks)
+				return &coreexecutor.StreamResult{Chunks: chunks}, nil
+			}}
+			handler, _ := registerBootstrapExecutor(t, executor)
+			handler.SetPluginHost(&handlerInterceptorTestHost{interceptStreamChunk: func(_ context.Context, req pluginapi.StreamChunkInterceptRequest) pluginapi.StreamChunkInterceptResponse {
+				return pluginapi.StreamChunkInterceptResponse{Body: cloneBytes(req.Body), DropChunk: string(req.Body) == "drop"}
+			}})
+			data, _, errs := handler.ExecuteStreamWithAuthManager(t.Context(), "openai", "bootstrap-model", []byte(`{"model":"bootstrap-model"}`), "")
+			if data != nil {
+				for chunk := range data {
+					t.Errorf("unexpected data: %s", chunk)
+				}
+			}
+			var terminal *interfaces.ErrorMessage
+			for msg := range errs {
+				if msg != nil {
+					terminal = msg
+				}
+			}
+			if terminal == nil || terminal.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("error lost: %+v", terminal)
+			}
+			if executor.Calls() != 1 {
+				t.Fatalf("already sent request replayed: calls=%d", executor.Calls())
+			}
+		})
+	}
+}

@@ -1850,6 +1850,15 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							state.NextRetryAfter = next
 						}
 						ownModelNonQuotaDeadline = state.NextRetryAfter
+					} else if isWebsocketHandshakeRejectedResultError(result.Error) {
+						next := recoverableFailureRetryAfterWithHint(now, result.RetryAfter, disableCooling)
+						ownModelNonQuotaDeadline = next
+						if state.Quota.Exceeded && state.Quota.NextRecoverAt.After(now) && state.Quota.NextRecoverAt.After(next) {
+							next = state.Quota.NextRecoverAt
+						}
+						state.NextRetryAfter = next
+						state.Unavailable = !next.IsZero()
+						state.StatusMessage = ErrorCodeWebsocketHandshakeRejected
 					} else if isCloudflareChallengeResultError(result.Error) {
 						next, backoffLevel := nextCloudflareCooldown(state.Quota.BackoffLevel, disableCooling, now)
 						state.NextRetryAfter = next
@@ -3274,6 +3283,7 @@ func resultErrorFromError(err error) *Error {
 		// cannot downgrade whole-credential exhaustion.
 		switch strings.ToLower(strings.TrimSpace(resultErr.Code)) {
 		case transientRateLimitErrorCode,
+			ErrorCodeWebsocketHandshakeRejected,
 			requestScopedErrorCode,
 			streamTruncatedErrorCode,
 			connectionLifecycleErrorCode,
@@ -4445,9 +4455,12 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		auth.NextRetryAfter = time.Time{}
 		auth.LastError = cloneError(resultErr)
 		persistTOSAppealMetadata(auth, resultErr)
-	} else if isTransientRateLimitResultError(resultErr) && statusCode == http.StatusTooManyRequests {
-		// Without a model key the transient capacity rejection degrades to an
-		// auth-level transient cooldown (issue 7017), never quota exhaustion.
+	} else if (isTransientRateLimitResultError(resultErr) && statusCode == http.StatusTooManyRequests) || isWebsocketHandshakeRejectedResultError(resultErr) {
+		// Without a model key, capacity or unexplained handshake rejection uses
+		// auth-level recoverable cooling, never quota exhaustion.
+		if isWebsocketHandshakeRejectedResultError(resultErr) {
+			auth.StatusMessage = ErrorCodeWebsocketHandshakeRejected
+		}
 		next := transientRateLimitRetryAfter(now, retryAfter, disableCooling)
 		ownAuthNonQuotaDeadline = next
 		if isForceAuth {
@@ -4567,10 +4580,10 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		ownAuthRetryDeadline = ownAuthForceDeadline
 	}
 	if !isQuotaCooldownResultError(resultErr) {
-		if !ownAuthNonQuotaDeadline.IsZero() || isTransientRateLimitResultError(resultErr) {
+		if !ownAuthNonQuotaDeadline.IsZero() || isTransientRateLimitResultError(resultErr) || isWebsocketHandshakeRejectedResultError(resultErr) {
 			ownAuthRetryDeadline = ownAuthNonQuotaDeadline
 		}
-		if !isTransientRateLimitResultError(resultErr) && ownAuthNonQuotaDeadline.IsZero() {
+		if !isTransientRateLimitResultError(resultErr) && !isWebsocketHandshakeRejectedResultError(resultErr) && ownAuthNonQuotaDeadline.IsZero() {
 			ownAuthNonQuotaDeadline = auth.NextRetryAfter
 		}
 		if isForceAuth && ownAuthForceDeadline.After(ownAuthNonQuotaDeadline) {

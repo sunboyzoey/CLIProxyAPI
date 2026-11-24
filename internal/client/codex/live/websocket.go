@@ -58,11 +58,12 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 	ctx = coreexecutor.WithDownstreamWebsocket(ctx)
 	selectionOpts := coreexecutor.Options{Headers: liveSelectionHeaders(c)}
 	ctx = handlers.EnrichContextWithSessionHierarchy(ctx, selectionOpts.Headers, nil, nil)
-	selection, selected, errSelect := h.selectOAuth(ctx, selectionModel, selectionOpts)
+	selection, selected, releaseNative, errSelect := h.acquireOAuth(ctx, selectionModel, selectionOpts)
 	if errSelect != nil {
 		writeSelectionError(c, errSelect)
 		return
 	}
+	defer releaseNative()
 	if selected == nil {
 		if selection != nil {
 			selection.End("missing_auth")
@@ -230,6 +231,12 @@ func (h *Handler) HandleDirectWebsocket(c *gin.Context) {
 		if errBind := selection.Bind(closeDownstream); errBind != nil {
 			return
 		}
+	}
+
+	releaseSession, active := h.retainDirectSession(ctx, closeUpstream, closeDownstream, func() error { releaseNative(); return nil })
+	defer releaseSession()
+	if !active {
+		return
 	}
 
 	if errRelay := relayWebsockets(downstream, upstream); errRelay != nil && !isNormalWebsocketClose(errRelay) {

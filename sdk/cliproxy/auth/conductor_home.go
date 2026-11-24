@@ -1035,6 +1035,9 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 		return nil, errRetained
 	}
 	if retainedOK {
+		if g := OAuthGroupFromContext(ctx); g != "" && !retained.Auth.InOAuthGroup(g) {
+			return nil, &Error{Code: "auth_not_found", Message: "no eligible account in OAuth group", HTTPStatus: 503}
+		}
 		return retained, nil
 	}
 	if errLoss := cliproxyexecutor.WebsocketInputLossError(ctx); errLoss != nil {
@@ -1323,6 +1326,10 @@ func (m *Manager) pickHomeDispatchSelection(ctx context.Context, model string, o
 	selection.SelectionID = strings.TrimSpace(dispatch.SelectionID)
 	selection.CanonicalSessionID = sessionID
 	selection.ParentSessionID = parentSessionID
+	if g := OAuthGroupFromContext(ctx); g != "" && !selection.Auth.InOAuthGroup(g) {
+		selection.End("oauth_group_mismatch")
+		return nil, &Error{Code: "auth_not_found", Message: "no eligible account in OAuth group", HTTPStatus: 503}
+	}
 	return selection, nil
 }
 
@@ -1370,6 +1377,10 @@ func requestedModelFromMetadata(metadata map[string]any, fallback string) string
 }
 
 func (m *Manager) findAllAntigravityCreditsCandidateAuths(ctx context.Context, routeModel string, opts cliproxyexecutor.Options) ([]creditsCandidateEntry, error) {
+	if OAuthGroupFromContext(ctx) != "" {
+		return nil, nil
+	}
+
 	if m == nil || !m.localExecutionAllowed() {
 		return nil, nil
 	}

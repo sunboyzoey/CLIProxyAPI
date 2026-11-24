@@ -26,6 +26,8 @@ const AutoServiceTier = "auto"
 type Record struct {
 	// RequestID uniquely identifies this specific model execution instance (UUID v4).
 	RequestID string
+	// Supplemental marks additional-model accounting for an existing execution.
+	Supplemental bool
 	// TraceID identifies the parent inbound HTTP request when available (8-character hex).
 	TraceID string
 	// SelectionID identifies the scheduler selection decision that produced this usage record when available.
@@ -50,8 +52,10 @@ type Record struct {
 	AuthIndex       string
 	// AccessTokenSHA256 identifies the OAuth token version without exposing the token.
 	AccessTokenSHA256 string
-	AuthType          string
-	Source            string
+	// AuthIdentity is the stable, hashed OAuth subject/account identity captured at dispatch.
+	AuthIdentity string
+	AuthType     string
+	Source       string
 	// ReasoningEffort stores the translated upstream thinking level for request event logs.
 	ReasoningEffort string
 	// ServiceTier stores the client-requested service tier.
@@ -66,6 +70,8 @@ type Record struct {
 	ResponseServiceTier string
 	// ResponseModel stores the model name reported by the upstream response, empty when unknown.
 	ResponseModel string
+	// ResponseStatus preserves an explicit provider terminal outcome when available.
+	ResponseStatus string
 	// Generate reports whether the client requested actual generation.
 	// nil or true means generation is enabled; only an explicit false disables generation.
 	// Use GenerateFlag to set the value and GenerateEnabled to read it with the default.
@@ -105,7 +111,20 @@ type Failure struct {
 }
 
 // Detail holds the token and structured usage breakdown captured from an upstream response.
+// ObservedTokens preserves actual counters from a provider usage object. Nil means
+// unavailable; legacy integer counters may contain normalized or inferred values.
+type ObservedTokens struct {
+	InputTokens         *int64
+	OutputTokens        *int64
+	ReasoningTokens     *int64
+	TotalTokens         *int64
+	CacheReadTokens     *int64
+	CacheCreationTokens *int64
+}
+
 type Detail struct {
+	ResponseStatus      string
+	Observed            *ObservedTokens
 	InputTokens         int64
 	OutputTokens        int64
 	ReasoningTokens     int64

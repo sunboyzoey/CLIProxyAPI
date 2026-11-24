@@ -57,7 +57,7 @@ func (h *Host) RegisterManagementRoutes(ctx context.Context, reserved map[string
 
 		for _, item := range resp.Routes {
 			method, path, okRoute := normalizeManagementRoute(item)
-			if !okRoute {
+			if !okRoute || (strings.HasPrefix(path, "/v8/") && !strings.HasPrefix(path, "/v8/management/plugins/"+record.id+"/")) {
 				log.Warnf("pluginhost: plugin %s declared invalid management route %s %s", record.id, item.Method, item.Path)
 				continue
 			}
@@ -145,7 +145,12 @@ func normalizeManagementRoute(item pluginapi.ManagementRoute) (string, string, b
 		return "", "", false
 	}
 	fullPath := managementBasePath + path
-	if !strings.HasPrefix(fullPath, managementBasePath+"/") {
+	if strings.HasPrefix(path, "/v8/management/plugins/") {
+		if strings.Contains(path, "..") {
+			return "", "", false
+		}
+		fullPath = path
+	} else if !strings.HasPrefix(fullPath, managementBasePath+"/") {
 		return "", "", false
 	}
 	if strings.ContainsAny(fullPath, " \t\r\n") || strings.Contains(fullPath, ":") || strings.Contains(fullPath, "*") {

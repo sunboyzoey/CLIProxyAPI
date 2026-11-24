@@ -779,6 +779,11 @@ func (s *Service) reconcileRegisteredModelStates(ctx context.Context, auth *core
 	if strings.EqualFold(auth.Provider, "antigravity") && !s.antigravityHomeEnabled() {
 		return
 	}
+	// A missing OAuth manifest temporarily retracts routes without retiring
+	// cooldowns. Only confirmed manifest publication reconciles these grants.
+	if auth.OAuthAccountGroup() != "" && usesCodexAccountCatalog(s.currentConfig()) {
+		return
+	}
 	s.coreManager.ReconcileRegistryModelStates(ctx, auth.ID)
 }
 

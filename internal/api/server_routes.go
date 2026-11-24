@@ -100,7 +100,7 @@ func (s *Server) setupRoutes() {
 		s.engine.Handle(method, "/v1/tunnel", s.handleWebsocketTunnel)
 	}
 
-	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler)
+	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler, s.getConfig)
 	standardAuth := realtimeStandardAuthMiddleware(s.accessManager)
 	s.engine.GET("/v1/realtime", realtimeAuth, s.codexLiveHandler.HandleRealtimeWebsocket)
 	s.engine.POST("/v1/realtime", realtimeAuth, s.codexLiveHandler.Handle)
@@ -301,68 +301,15 @@ func (s *Server) codexAlphaSearchSelectionModel(ctx context.Context, c *gin.Cont
 		return model, nil
 	}
 	if resp.TargetKind != pluginapi.ModelRouteTargetProvider || !strings.EqualFold(strings.TrimSpace(resp.Target), "codex") {
+		if resp.TargetKind == pluginapi.ModelRouteTargetSelf && strings.TrimSpace(resp.Reason) != "" {
+			return "", fmt.Errorf("Codex Alpha Search route rejected: %s", strings.TrimSpace(resp.Reason))
+		}
 		return "", fmt.Errorf("unsupported Codex Alpha Search model route target %q (%q)", resp.TargetKind, resp.Target)
 	}
 	if targetModel := strings.TrimSpace(resp.TargetModel); targetModel != "" {
 		return targetModel, nil
 	}
 	return model, nil
-}
-
-func sanitizeCodexAlphaSearchBody(body []byte) []byte {
-	var payload map[string]json.RawMessage
-	if errUnmarshal := json.Unmarshal(body, &payload); errUnmarshal != nil || payload == nil {
-		return body
-	}
-
-	removed := false
-	for _, field := range []string{"prompt_cache_key", "prompt_cache_retention"} {
-		if _, exists := payload[field]; exists {
-			delete(payload, field)
-			removed = true
-		}
-	}
-	if !removed {
-		return body
-	}
-
-	sanitizedBody, errMarshal := json.Marshal(payload)
-	if errMarshal != nil {
-		return body
-	}
-	return sanitizedBody
-}
-
-// rewriteCodexAlphaSearchModel replaces the top-level model field with the
-// credential-resolved upstream model before the request is forwarded.
-func rewriteCodexAlphaSearchModel(body []byte, upstreamModel string) []byte {
-	upstreamModel = strings.TrimSpace(upstreamModel)
-	if upstreamModel == "" {
-		return body
-	}
-
-	var payload map[string]json.RawMessage
-	if errUnmarshal := json.Unmarshal(body, &payload); errUnmarshal != nil || payload == nil {
-		return body
-	}
-	if _, exists := payload["model"]; !exists {
-		return body
-	}
-
-	modelJSON, errMarshalModel := json.Marshal(upstreamModel)
-	if errMarshalModel != nil {
-		return body
-	}
-	if string(payload["model"]) == string(modelJSON) {
-		return body
-	}
-
-	payload["model"] = modelJSON
-	rewrittenBody, errMarshal := json.Marshal(payload)
-	if errMarshal != nil {
-		return body
-	}
-	return rewrittenBody
 }
 
 func homeSelectionAttemptContext(ctx context.Context, selection *auth.HomeDispatchSelection) (context.Context, func(), error) {
@@ -392,7 +339,6 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 		Model string `json:"model"`
 	}
 	_ = json.Unmarshal(body, &routing)
-	upstreamRequestBody := sanitizeCodexAlphaSearchBody(body)
 
 	selectionHeaders := c.Request.Header.Clone()
 	if sessionID := strings.TrimSpace(routing.ID); sessionID != "" {
@@ -415,7 +361,9 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 			selected = selection.CloneAuth()
 		}
 	} else {
-		selected, err = s.handlers.AuthManager.SelectAuthWithCredentialPolicy(ctx, "codex", selectionModel, auth.CredentialPolicyCodexAlphaSearchV1, selectionOpts)
+		var releaseNative func()
+		selected, releaseNative, err = s.handlers.AuthManager.AcquireAuthWithCredentialPolicy(ctx, "codex", selectionModel, auth.CredentialPolicyCodexAlphaSearchV1, selectionOpts)
+		defer releaseNative()
 	}
 	if err != nil {
 		status := clienterror.HTTPStatusFromErrorOr(err, http.StatusServiceUnavailable)
@@ -469,6 +417,7 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 		}
 	}
 
+	cfg := s.getConfig()
 	errMissingBaseURL := errors.New("Codex Alpha Search API key base URL unavailable")
 	routeModel := strings.TrimSpace(selectionModel)
 	if routeModel == "" {
@@ -480,9 +429,7 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 			headers.Set("Chatgpt-Account-Id", accountID)
 		}
 		upstreamURL := "https://chatgpt.com/backend-api/codex/alpha/search"
-		requestBody := upstreamRequestBody
-		// API-key Alpha Search reuses normal credential-aware model resolution so
-		// CPA routing prefixes and model aliases are not forwarded upstream.
+		// API-key credentials use their explicitly configured search endpoint.
 		if current.AuthKind() == auth.AuthKindAPIKey {
 			baseURL := ""
 			if current.Attributes != nil {
@@ -492,10 +439,9 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 				return nil, errMissingBaseURL
 			}
 			upstreamURL = strings.TrimRight(baseURL, "/") + "/alpha/search"
-			if upstreamModel := s.handlers.AuthManager.ResolveExecutionModel(current, routeModel); upstreamModel != "" {
-				requestBody = rewriteCodexAlphaSearchModel(upstreamRequestBody, upstreamModel)
-			}
 		}
+		upstreamModel := s.handlers.AuthManager.ResolveExecutionModel(current, routeModel)
+		requestBody := prepareCodexAlphaSearchBody(cfg, body, upstreamModel, routing.Model, c.Request.URL.Path, c.Request.Header)
 		req, errRequest := s.handlers.AuthManager.NewHttpRequest(ctx, current, http.MethodPost, upstreamURL, requestBody, headers)
 		if errRequest != nil {
 			return nil, errRequest
@@ -522,7 +468,6 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 		c.JSON(clienterror.HTTPStatusFromErrorOr(errCtx, http.StatusRequestTimeout), gin.H{"error": errCtx.Error()})
 		return
 	}
-	cfg := s.getConfig()
 	resp, err := performRequest(selected)
 	if err != nil {
 		if errors.Is(err, errMissingBaseURL) {
@@ -574,6 +519,9 @@ func (s *Server) codexAlphaSearch(c *gin.Context) {
 	if selection != nil && resp.StatusCode == http.StatusUnauthorized {
 		s.handlers.AuthManager.ReportHomeUnauthorized(ctx, selected, "codex", selectionModel, upstreamBody)
 		log.WithField("status", resp.StatusCode).Warnf("codex alpha search upstream request failed: %s", logging.SafeDiagnosticForLog(string(upstreamBody)))
+	}
+	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+		c.Header("Retry-After", retryAfter)
 	}
 	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
 		c.Header("Content-Type", contentType)
