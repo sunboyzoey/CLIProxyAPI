@@ -219,6 +219,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		}
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+	if err := cfg.ValidateOAuthKeyGroups(); err != nil {
+		return nil, err
+	}
 	if errValidate := validateTrustedProxies(cfg.TrustedProxies); errValidate != nil {
 		return nil, errValidate
 	}

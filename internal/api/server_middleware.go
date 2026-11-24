@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/safemode"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
@@ -521,6 +522,7 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 					c.Set("accessMetadata", result.Metadata)
 				}
 				reqCtx := coreusage.WithAPIKey(c.Request.Context(), result.Principal)
+				reqCtx = coreauth.WithOAuthGroup(reqCtx, result.Metadata[sdkaccess.OAuthAccountGroup])
 				reqCtx = coreusage.WithAccessProvider(reqCtx, result.Provider)
 				reqCtx = coreusage.WithIsNativeKey(reqCtx, coreusage.IsNativeAccessProvider(result.Provider))
 				c.Request = c.Request.WithContext(reqCtx)
@@ -560,7 +562,7 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 	}
 }
 
-func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handler) gin.HandlerFunc {
+func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handler, configs ...func() *config.Config) gin.HandlerFunc {
 	fallback := realtimeStandardAuthMiddleware(manager)
 	return func(c *gin.Context) {
 		authorization, matched, errAuthenticate := handler.AuthenticateClientSecret(c.Request)
@@ -589,6 +591,17 @@ func realtimeAuthMiddleware(manager *sdkaccess.Manager, handler *codexlive.Handl
 		c.Set("userApiKey", principal)
 		c.Set("accessProvider", provider)
 		reqCtx := coreusage.WithAPIKey(c.Request.Context(), principal)
+		if len(configs) > 0 && provider == sdkaccess.DefaultAccessProviderName {
+			if cfg := configs[0](); cfg != nil && cfg.OAuthGroupingEnabled() {
+				group := cfg.OAuthRoutingGroup(principal)
+				if group == "" {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "realtime issuer is no longer authorized"})
+					return
+				}
+				c.Set("accessMetadata", map[string]string{sdkaccess.OAuthAccountGroup: group})
+				reqCtx = coreauth.WithOAuthGroup(reqCtx, group)
+			}
+		}
 		reqCtx = coreusage.WithAccessProvider(reqCtx, provider)
 		reqCtx = coreusage.WithIsNativeKey(reqCtx, coreusage.IsNativeAccessProvider(provider))
 		c.Request = c.Request.WithContext(reqCtx)

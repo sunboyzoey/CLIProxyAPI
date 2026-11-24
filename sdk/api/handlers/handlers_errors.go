@@ -129,7 +129,7 @@ func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.Erro
 		}
 	}
 	if msg != nil && msg.Addon != nil && PassthroughHeadersEnabled(h.CurrentConfig()) {
-		for key, values := range msg.Addon {
+		for key, values := range FilterUpstreamHeaders(msg.Addon) {
 			if len(values) == 0 || IsCPAReservedResponseHeader(key) {
 				continue
 			}
@@ -191,7 +191,7 @@ func writeDirectErrorResponse(c *gin.Context, status int, msg *interfaces.ErrorM
 			c.Writer.Header().Add(key, value)
 		}
 	}
-	body := bytes.Clone(msg.Body)
+	body := []byte(SanitizeBPSPublicError(status, string(msg.Body)))
 	appendAPIResponse(c, body)
 	if !c.Writer.Written() && c.Writer.Header().Get("Content-Type") == "" {
 		c.Writer.Header().Set("Content-Type", "application/json")

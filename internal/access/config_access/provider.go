@@ -17,20 +17,28 @@ func Register(cfg *sdkconfig.SDKConfig) {
 	}
 
 	keys := normalizeKeys(cfg.APIKeys)
-	if len(keys) == 0 {
+	if len(keys) == 0 && !cfg.OAuthGroupingEnabled() {
 		sdkaccess.UnregisterProvider(sdkaccess.AccessProviderTypeConfigAPIKey)
 		return
 	}
 
+	p := newProvider(sdkaccess.DefaultAccessProviderName, keys)
+	if cfg.OAuthGroupingEnabled() {
+		p.groups = make(map[string]string, len(keys))
+		for _, key := range keys {
+			p.groups[key] = cfg.OAuthRoutingGroup(key)
+		}
+	}
 	sdkaccess.RegisterProvider(
 		sdkaccess.AccessProviderTypeConfigAPIKey,
-		newProvider(sdkaccess.DefaultAccessProviderName, keys),
+		p,
 	)
 }
 
 type provider struct {
-	name string
-	keys map[string]struct{}
+	name   string
+	keys   map[string]struct{}
+	groups map[string]string
 }
 
 func newProvider(name string, keys []string) *provider {
@@ -90,12 +98,18 @@ func (p *provider) Authenticate(_ context.Context, r *http.Request) (*sdkaccess.
 			continue
 		}
 		if _, ok := p.keys[candidate.value]; ok {
+			metadata := map[string]string{"source": candidate.source}
+			if p.groups != nil {
+				group := p.groups[candidate.value]
+				if group == "" {
+					return nil, sdkaccess.NewInvalidCredentialError()
+				}
+				metadata[sdkaccess.OAuthAccountGroup] = group
+			}
 			return &sdkaccess.Result{
 				Provider:  p.Identifier(),
 				Principal: candidate.value,
-				Metadata: map[string]string{
-					"source": candidate.source,
-				},
+				Metadata:  metadata,
 			}, nil
 		}
 	}

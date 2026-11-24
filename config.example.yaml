@@ -132,6 +132,16 @@ management:
 
 # Client authentication for the proxy API. These are not upstream provider keys.
 access:
+  # Select one CPA key per Codex account. Unassigned accounts accept all active keys.
+  # oauth-key-selection: true
+  # Optional: bind each downstream key fingerprint to one native Codex OAuth account group.
+  # GET /v8/management/oauth/account-groups lists the fingerprints in api-keys order.
+  # oauth-key-groups:
+  #   "<sha256-of-first-key>": default
+  #   "<sha256-of-second-key>": premium
+  # The v8 credential fields API accepts oauth_group (default when omitted) and
+  # service_tier (inherit, fast, ultrafast). POST /v8/management/credentials/codex-tiers
+  # with the name query parameter refreshes this account's model-specific capabilities.
   # API keys for authentication
   api-keys:
     - "your-api-key-1"

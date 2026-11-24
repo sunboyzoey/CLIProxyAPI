@@ -153,10 +153,6 @@ func (r *StreamRewriter) RewriteChunk(chunk []byte) []byte {
 	}
 	chunk = normalizeGluedSSEEvents(chunk)
 
-	if len(chunk) > maxPendingBufSize {
-		return chunk
-	}
-
 	// Handle raw JSON chunks (Gemini/OpenAI format without SSE "data:" prefix)
 	trimmed := bytes.TrimSpace(chunk)
 	if len(trimmed) > 0 && trimmed[0] == '{' && ojson.ValidBytes(trimmed) {
@@ -165,6 +161,12 @@ func (r *StreamRewriter) RewriteChunk(chunk []byte) []byte {
 			rewritten = r.rewriteModel(rewritten)
 		}
 		return rewritten
+	}
+
+	if len(chunk) > maxPendingBufSize {
+		// Bound incomplete buffering, not rewriting of complete events. Large
+		// SSE lines and batches must still honor the configured response alias.
+		return r.rewriteSSELines(chunk)
 	}
 
 	lastDoubleNewline := bytes.LastIndex(chunk, []byte("\n\n"))

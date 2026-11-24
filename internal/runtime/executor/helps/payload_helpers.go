@@ -101,10 +101,10 @@ func ApplyPayloadConfigWithTrackedPathsForExecutorDoc(cfg *config.Config, target
 }
 
 func applyPayloadConfigWithTrackedPathsForExecutorDoc(cfg *config.Config, targetExecutor, model, protocol, fromProtocol, root string, doc *ojson.Doc, original []byte, requestedModel, requestPath string, headers http.Header, trackedPaths ...string) (map[string]bool, bool) {
-	return applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, targetExecutor, model, protocol, fromProtocol, root, doc, original, requestedModel, requestPath, headers, nil, trackedPaths...)
+	return applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg, targetExecutor, model, protocol, fromProtocol, root, doc, original, requestedModel, requestPath, headers, nil, codexTierRule{}, trackedPaths...)
 }
 
-func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config, targetExecutor, model, protocol, fromProtocol, root string, doc *ojson.Doc, original []byte, requestedModel, requestPath string, headers http.Header, auth *cliproxyauth.Auth, trackedPaths ...string) (map[string]bool, bool) {
+func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config, targetExecutor, model, protocol, fromProtocol, root string, doc *ojson.Doc, original []byte, requestedModel, requestPath string, headers http.Header, auth *cliproxyauth.Auth, tier codexTierRule, trackedPaths ...string) (map[string]bool, bool) {
 	payloadConfigEvaluations.Add(1)
 	touched := make(map[string]bool)
 	if doc == nil || doc.Len() == 0 {
@@ -143,7 +143,7 @@ func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config,
 	}
 
 	rules := cfg.Payload
-	hasPayloadRules := len(rules.Default) != 0 || len(rules.DefaultRaw) != 0 || len(rules.Override) != 0 || len(rules.OverrideRaw) != 0 || len(rules.Replace) != 0 || len(rules.Filter) != 0
+	hasPayloadRules := tier.mode != "" || len(rules.Default) != 0 || len(rules.DefaultRaw) != 0 || len(rules.Override) != 0 || len(rules.OverrideRaw) != 0 || len(rules.Replace) != 0 || len(rules.Filter) != 0
 	if hasPayloadRules {
 		model = strings.TrimSpace(model)
 		requestedModel = strings.TrimSpace(requestedModel)
@@ -384,6 +384,12 @@ func applyPayloadConfigWithTrackedPathsForExecutorAndAuthDoc(cfg *config.Config,
 				if replacePayloadTextDoc(doc, protocol, root, rule, i, noteRuleWrite) {
 					mutated = true
 				}
+			}
+			// Account overrides apply to the selected credential after global writes.
+			// Explicit final filters can still remove the field.
+			if tier.apply(doc, model) {
+				mutated = true
+				markTouched("service_tier")
 			}
 			// Apply filter rules: remove matching paths from payload.
 			for i := range rules.Filter {

@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/credentialweight"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -686,6 +687,17 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
 	}
 	entry["success"] = auth.Success
 	entry["failed"] = auth.Failed
+	if group := auth.OAuthAccountGroup(); quota.v8 && group != "" {
+		entry["oauth_group"] = group
+		mode, _ := auth.Metadata["service_tier"].(string)
+		if mode == "" {
+			mode = "inherit"
+		}
+		entry["service_tier"] = mode
+		if tiers, ok := helps.CachedCodexAccountTiers(auth); ok {
+			entry["codex_tiers"] = tiers
+		}
+	}
 	entry["recent_requests"] = auth.RecentRequestsSnapshot(time.Now())
 	entry["quota"] = quotaObservationPayloadForProvider(auth.Provider, auth.Quota)
 	if modelQuotas := modelQuotaObservationPayload(auth.Provider, auth.ModelStates); len(modelQuotas) > 0 {

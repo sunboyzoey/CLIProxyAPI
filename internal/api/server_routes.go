@@ -100,7 +100,7 @@ func (s *Server) setupRoutes() {
 		s.engine.Handle(method, "/v1/tunnel", s.handleWebsocketTunnel)
 	}
 
-	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler)
+	realtimeAuth := realtimeAuthMiddleware(s.accessManager, s.codexLiveHandler, s.getConfig)
 	standardAuth := realtimeStandardAuthMiddleware(s.accessManager)
 	s.engine.GET("/v1/realtime", realtimeAuth, s.codexLiveHandler.HandleRealtimeWebsocket)
 	s.engine.POST("/v1/realtime", realtimeAuth, s.codexLiveHandler.Handle)

@@ -48,7 +48,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		if executionSessionID != "" {
 			sess = e.getOrCreateSession(executionSessionID)
 			if sess != nil {
-				sess.reqMu.Lock()
+				if errLock := sess.reqMu.LockContext(ctx); errLock != nil {
+					return nil, errLock
+				}
 				defer sess.reqMu.Unlock()
 			}
 		}
@@ -104,7 +106,9 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	} else if executionSessionID != "" {
 		sess = e.getOrCreateSession(executionSessionID)
 		if sess != nil {
-			sess.reqMu.Lock()
+			if errLock := sess.reqMu.LockContext(ctx); errLock != nil {
+				return nil, errLock
+			}
 		}
 	} else {
 		isEphemeralSession = true
@@ -1024,7 +1028,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 
 	instructionsResult := ojson.GetBytesNoCopy(req.Payload, "instructions")
 	hasExplicitInstructions := instructionsResult.Exists() && strings.TrimSpace(instructionsResult.String()) != ""
-	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts, auth))
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewCodexPayloadFinalizer(ctx, e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts, auth))
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 	ensureWebSearchToolForHistoryDoc(doc, opts.Headers)
 	// Do not let a built-in empty default become caller-provided on the next turn.

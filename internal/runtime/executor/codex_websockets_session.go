@@ -59,7 +59,7 @@ type codexWebsocketSession struct {
 	poolClosed       bool
 	handshakeHeaders http.Header
 
-	reqMu sync.Mutex
+	reqMu helps.ContextMutex
 
 	connMu sync.Mutex
 	// recoverTransport (under connMu): the current turn belongs to a downstream websocket,

@@ -803,6 +803,10 @@ func (h *BaseAPIHandler) WriteModelListResponse(c *gin.Context, sourceFormat str
 		}
 	}
 
+	if group := coreauth.AuthenticatedOAuthGroup(c); group != "" {
+		body = h.filterOAuthGroupModels(body, group)
+		c.Writer.Header().Del("Content-Length")
+	}
 	if modelID, detail := c.Get(ModelDetailIDContextKey); detail {
 		c.Writer.Header().Del("Content-Length")
 		var catalog struct {

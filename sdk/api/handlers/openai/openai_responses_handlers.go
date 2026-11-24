@@ -896,7 +896,7 @@ func (h *OpenAIResponsesAPIHandler) Models() []map[string]any {
 // It returns a list of available AI models with their capabilities
 // and specifications in OpenAIResponses-compatible format.
 func (h *OpenAIResponsesAPIHandler) OpenAIResponsesModels(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
+	h.WriteModelListResponse(c, h.HandlerType(), gin.H{
 		"object": "list",
 		"data":   h.Models(),
 	})

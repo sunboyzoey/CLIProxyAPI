@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/xai"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/credentialweight"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher/synthesizer"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
@@ -309,6 +310,25 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
+	if raw, ok := req["oauth_group"]; ok {
+		value, _ := decodeAuthFileFieldValue(raw)
+		if group, okString := value.(string); okString && strings.HasPrefix(group, "key:") {
+			cfg := h.configSnapshot()
+			available := false
+			if cfg != nil && cfg.OAuthKeySelection {
+				for _, key := range cfg.APIKeys {
+					if group == "key:"+config.OAuthKeyFingerprint(key) {
+						available = true
+						break
+					}
+				}
+			}
+			if !available {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "selected OAuth API key is not available"})
+				return
+			}
+		}
+	}
 	// Find auth by name or ID
 	var targetAuth *coreauth.Auth
 	if auth, ok := h.authManager.GetByID(name); ok {
@@ -380,6 +400,15 @@ func applyAuthFileFieldsPatch(targetAuth *coreauth.Auth, req map[string]json.Raw
 		value, errDecode := decodeAuthFileFieldValue(rawValue)
 		if errDecode != nil {
 			return &authFileFieldPatchError{message: fmt.Sprintf("invalid field %s", fieldPath)}
+		}
+		root := rootAuthFileField(fieldPath)
+		if root == "oauth_group" || root == "service_tier" {
+			if fieldPath != root || targetAuth.Provider != "codex" || targetAuth.AuthKind() != coreauth.AuthKindOAuth {
+				return &authFileFieldPatchError{message: "field requires a native Codex OAuth credential"}
+			}
+			if err := coreauth.ValidateCodexAccountField(root, value); err != nil {
+				return &authFileFieldPatchError{message: err.Error()}
+			}
 		}
 		if rootAuthFileField(fieldPath) == "excluded_models" {
 			if fieldPath != "excluded_models" {

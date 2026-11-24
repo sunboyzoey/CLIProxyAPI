@@ -75,6 +75,7 @@ func BuildErrorResponseBody(status int, errText string) []byte {
 // preserving structured classifications (such as terminal upstream auth failures and retryable flags)
 // present in err.
 func BuildErrorResponseBodyWithError(status int, errText string, err error) []byte {
+	errText = SanitizeBPSPublicError(status, errText)
 	if status <= 0 {
 		status = http.StatusInternalServerError
 	}
@@ -751,6 +752,9 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 			case <-cancelCtx.Done():
 			}
 		}()
+	}
+	if c != nil {
+		newCtx = coreauth.WithOAuthGroup(newCtx, coreauth.AuthenticatedOAuthGroup(c))
 	}
 	newCtx = context.WithValue(newCtx, "gin", c)
 	newCtx = coreusage.CaptureIdentity(newCtx)

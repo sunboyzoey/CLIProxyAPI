@@ -78,7 +78,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 
 	instructionsResult := ojson.GetBytesNoCopy(req.Payload, "instructions")
 	hasExplicitInstructions := instructionsResult.Exists() && strings.TrimSpace(instructionsResult.String()) != ""
-	ctx = helps.WithPayloadFinalizer(ctx, helps.NewPayloadFinalizer(e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts, auth))
+	ctx = helps.WithPayloadFinalizer(ctx, helps.NewCodexPayloadFinalizer(ctx, e.cfg, "codex-websockets", baseModel, to.String(), "", originalTranslated, req, opts, auth))
 	helps.SetStringIfDifferentDoc(doc, "model", baseModel)
 	helps.SetBoolIfDifferentDoc(doc, "stream", true)
 	_ = doc.Delete("prompt_cache_retention")
@@ -133,7 +133,9 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	if executionSessionID != "" {
 		sess = e.getOrCreateSession(executionSessionID)
-		sess.reqMu.Lock()
+		if errLock := sess.reqMu.LockContext(ctx); errLock != nil {
+			return resp, errLock
+		}
 		sessionLocked = true
 		defer unlockSession()
 	} else {

@@ -84,6 +84,7 @@ type requiredAuthKindContextKey struct{}
 type credentialPolicyContextKey struct{}
 
 type authSelectionEligibility struct {
+	oauthGroup       string
 	requiredKind     string
 	credentialPolicy string
 	disallowFreeAuth bool
@@ -108,6 +109,7 @@ func credentialPolicyFromContext(ctx context.Context) string {
 func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecutor.Options) authSelectionEligibility {
 	eligibility := authSelectionEligibility{disallowFreeAuth: disallowFreeAuthFromMetadata(opts.Metadata)}
 	if ctx != nil {
+		eligibility.oauthGroup = OAuthGroupFromContext(ctx)
 		eligibility.requiredKind, _ = ctx.Value(requiredAuthKindContextKey{}).(string)
 		eligibility.credentialPolicy, _ = ctx.Value(credentialPolicyContextKey{}).(string)
 	}
@@ -116,6 +118,9 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 
 func (e authSelectionEligibility) allows(auth *Auth) bool {
 	if auth == nil {
+		return false
+	}
+	if e.oauthGroup != "" && !auth.InOAuthGroup(e.oauthGroup) {
 		return false
 	}
 	if e.requiredKind != "" && auth.AuthKind() != e.requiredKind {

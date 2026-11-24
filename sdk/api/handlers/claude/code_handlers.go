@@ -630,7 +630,7 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 				c.Writer.Header().Add(key, value)
 			}
 		}
-		body := bytes.Clone(msg.Body)
+		body := []byte(handlers.SanitizeBPSPublicError(status, string(msg.Body)))
 		if clienterror.IsClaudeThreadNotFound(status, errors.New(string(body))) {
 			if markedBody, errMarshal := json.Marshal(h.toClaudeError(&interfaces.ErrorMessage{
 				StatusCode: status,
@@ -656,7 +656,7 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 		}
 	}
 	if msg != nil && msg.Addon != nil && handlers.PassthroughHeadersEnabled(h.CurrentConfig()) {
-		for key, values := range msg.Addon {
+		for key, values := range handlers.FilterUpstreamHeaders(msg.Addon) {
 			if len(values) == 0 || handlers.IsCPAReservedResponseHeader(key) {
 				continue
 			}
@@ -699,6 +699,9 @@ func claudeErrorText(err error) string {
 }
 
 func claudeErrorDetailFromText(status int, errText string) (string, string) {
+	if safe := handlers.SanitizeBPSPublicError(status, errText); safe != errText {
+		return claudeErrorTypeFromStatus(status), ojson.Get(safe, "error.message").String()
+	}
 	message := strings.TrimSpace(errText)
 	if message == "" {
 		message = http.StatusText(status)

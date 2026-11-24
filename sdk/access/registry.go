@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+const OAuthAccountGroup = "oauth_group"
+
 // Provider validates credentials for incoming requests.
 type Provider interface {
 	Identifier() string
